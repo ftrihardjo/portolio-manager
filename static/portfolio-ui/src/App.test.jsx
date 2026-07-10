@@ -2,10 +2,16 @@ import React from 'react';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import App from './App';
-import { invoke } from '@forge/bridge';
+import { invoke, router } from '@forge/bridge';
 
 jest.mock('@forge/bridge', () => ({
   invoke: jest.fn(),
+  router: {
+    open: jest.fn().mockResolvedValue(undefined),
+    navigate: jest.fn().mockResolvedValue(undefined),
+    getUrl: jest.fn().mockResolvedValue(new URL('https://example.atlassian.net/')),
+    reload: jest.fn(),
+  },
 }));
 
 // Suppress expected React warnings in tests
@@ -191,9 +197,7 @@ describe('App', () => {
     });
 
     // ── NEW: Project Navigation Click Tests ────────────────────────────
-    it('dispatches navigation event when clicking project name', async () => {
-      const dispatchSpy = jest.spyOn(window, 'dispatchEvent').mockImplementation(() => true);
-      
+    it('navigates to the Jira project page when clicking project name', async () => {
       render(<App />);
       await waitFor(() => screen.getByText('Alpha'));
       
@@ -201,14 +205,7 @@ describe('App', () => {
       const projectBtn = screen.getByRole('button', { name: /Alpha \(PROJ1\)/i });
       fireEvent.click(projectBtn);
       
-      expect(dispatchSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'portfolio:navigate:project',
-          detail: { projectKey: 'PROJ1', projectName: 'Alpha' }
-        })
-      );
-      
-      dispatchSpy.mockRestore();
+      expect(router.open).toHaveBeenCalledWith('/jira/projects/PROJ1/summary');
     });
 
     it('announces navigation via ARIA live region', async () => {
@@ -682,22 +679,15 @@ describe('App', () => {
       });
     });
 
-    it('should make stats numbers clickable and dispatch events', async () => {
-      const dispatchSpy = jest.spyOn(window, 'dispatchEvent').mockImplementation(() => true);
-      
+    it('should make stats numbers clickable and navigate to the issue navigator', async () => {
       render(<App />);
       await waitFor(() => screen.getByTestId('stats-total-PROJ1'));
       
       fireEvent.click(screen.getByTestId('stats-total-PROJ1'));
       
-      expect(dispatchSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'portfolio:navigate:issues',
-          detail: { projectKey: 'PROJ1', status: 'all' }
-        })
+      expect(router.open).toHaveBeenCalledWith(
+        `/issues/?jql=${encodeURIComponent('project = "PROJ1"')}`
       );
-      
-      dispatchSpy.mockRestore();
     });
 
     it('should filter by status: blocked', async () => {

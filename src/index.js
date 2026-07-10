@@ -48,6 +48,27 @@ async function jiraGet(path, params = {}) {
   return res.json();
 }
 
+/**
+ * Helper: makes an authenticated POST request to Jira API with a JSON body.
+ * Used for endpoints like /rest/api/3/search/approximate-count that don't
+ * take query params.
+ */
+async function jiraPost(path, body) {
+  // Pass `path` as a literal template string segment (not a substitution
+  // value), so `route` doesn't URL-encode the slashes in the path itself.
+  const url = route([path]);
+  const res = await api.asUser().requestJira(url, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const responseBody = await res.text();
+    throw new Error(`Jira ${res.status} on ${path}: ${responseBody}`);
+  }
+  return res.json();
+}
+
 // ── Resolvers ────────────────────────────────────────────────────────────
 
 resolver.define('getProjects', async () => {
@@ -69,18 +90,37 @@ resolver.define('getProjectStats', async ({ payload }) => {
   const { projectKey } = payload;
   const base = `project = "${projectKey}"`;
 
-  const [all, done, blocked, inProgress] = await Promise.all([
-    jiraGet('/rest/api/3/search', { jql: base, maxResults: '0' }),
-    jiraGet('/rest/api/3/search', { jql: `${base} AND statusCategory = Done`, maxResults: '0' }),
-    jiraGet('/rest/api/3/search', { jql: `${base} AND status = "Blocked"`, maxResults: '0' }),
-    jiraGet('/rest/api/3/search', { jql: `${base} AND statusCategory = "In Progress"`, maxResults: '0' }),
+  // The legacy /rest/api/3/search endpoint (and its "total" field) has been
+  // removed by Atlassian. Counts now come from the approximate-count endpoint,
+  // and we no longer get a free "total" back from a plain issue search.
+  const [all, done, blocked, inProgress, earliestEpic, latestEpic] = await Promise.all([
+    jiraPost('/rest/api/3/search/approximate-count', { jql: base }),
+    jiraPost('/rest/api/3/search/approximate-count', { jql: `${base} AND statusCategory = Done` }),
+    jiraPost('/rest/api/3/search/approximate-count', { jql: `${base} AND status = "Blocked"` }),
+    jiraPost('/rest/api/3/search/approximate-count', { jql: `${base} AND statusCategory = "In Progress"` }),
+    // Earliest epic start date for this project, used to power the Projects
+    // table's Start column and the date-range filter (previously always
+    // empty because getProjects never returned any date fields).
+    jiraGet('/rest/api/3/search/jql', {
+      jql: `${base} AND issuetype = Epic AND cf[10015] is not EMPTY ORDER BY cf[10015] ASC`,
+      maxResults: '1',
+      fields: 'customfield_10015',
+    }),
+    // Latest epic due date for this project, used for the Due column / filter.
+    jiraGet('/rest/api/3/search/jql', {
+      jql: `${base} AND issuetype = Epic AND duedate is not EMPTY ORDER BY duedate DESC`,
+      maxResults: '1',
+      fields: 'duedate',
+    }),
   ]);
 
   return {
-    total: all.total ?? 0,
-    done: done.total ?? 0,
-    blocked: blocked.total ?? 0,
-    inProgress: inProgress.total ?? 0,
+    total: all.count ?? 0,
+    done: done.count ?? 0,
+    blocked: blocked.count ?? 0,
+    inProgress: inProgress.count ?? 0,
+    startDate: earliestEpic.issues?.[0]?.fields?.customfield_10015 ?? null,
+    dueDate: latestEpic.issues?.[0]?.fields?.duedate ?? null,
   };
 });
 
@@ -89,7 +129,7 @@ resolver.define('getIssueDependencies', async ({ payload }) => {
   if (!projectKeys?.length) return [];
 
   const jql = `project in (${projectKeys.join(',')}) AND issuetype in (Epic, Story) ORDER BY created DESC`;
-  const data = await jiraGet('/rest/api/3/search', {
+  const data = await jiraGet('/rest/api/3/search/jql', {
     jql,
     maxResults: '100',
     fields: 'summary,status,issuetype,project,issuelinks,assignee,priority'
@@ -117,7 +157,7 @@ resolver.define('getRoadmapEpics', async ({ payload }) => {
   if (!projectKeys?.length) return [];
 
   const jql = `project in (${projectKeys.join(',')}) AND issuetype = Epic ORDER BY duedate ASC`;
-  const data = await jiraGet('/rest/api/3/search', {
+  const data = await jiraGet('/rest/api/3/search/jql', {
     jql,
     maxResults: '100',
     fields: 'summary,status,project,duedate,customfield_10015,assignee'

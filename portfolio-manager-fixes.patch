@@ -1,0 +1,366 @@
+diff --git a/src/index.js b/src/index.js
+index dd1d4c6..3df6a0d 100644
+--- a/src/index.js
++++ b/src/index.js
+@@ -48,6 +48,27 @@ async function jiraGet(path, params = {}) {
+   return res.json();
+ }
+ 
++/**
++ * Helper: makes an authenticated POST request to Jira API with a JSON body.
++ * Used for endpoints like /rest/api/3/search/approximate-count that don't
++ * take query params.
++ */
++async function jiraPost(path, body) {
++  // Pass `path` as a literal template string segment (not a substitution
++  // value), so `route` doesn't URL-encode the slashes in the path itself.
++  const url = route([path]);
++  const res = await api.asUser().requestJira(url, {
++    method: 'POST',
++    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
++    body: JSON.stringify(body),
++  });
++  if (!res.ok) {
++    const responseBody = await res.text();
++    throw new Error(`Jira ${res.status} on ${path}: ${responseBody}`);
++  }
++  return res.json();
++}
++
+ // ── Resolvers ────────────────────────────────────────────────────────────
+ 
+ resolver.define('getProjects', async () => {
+@@ -69,18 +90,37 @@ resolver.define('getProjectStats', async ({ payload }) => {
+   const { projectKey } = payload;
+   const base = `project = "${projectKey}"`;
+ 
+-  const [all, done, blocked, inProgress] = await Promise.all([
+-    jiraGet('/rest/api/3/search', { jql: base, maxResults: '0' }),
+-    jiraGet('/rest/api/3/search', { jql: `${base} AND statusCategory = Done`, maxResults: '0' }),
+-    jiraGet('/rest/api/3/search', { jql: `${base} AND status = "Blocked"`, maxResults: '0' }),
+-    jiraGet('/rest/api/3/search', { jql: `${base} AND statusCategory = "In Progress"`, maxResults: '0' }),
++  // The legacy /rest/api/3/search endpoint (and its "total" field) has been
++  // removed by Atlassian. Counts now come from the approximate-count endpoint,
++  // and we no longer get a free "total" back from a plain issue search.
++  const [all, done, blocked, inProgress, earliestEpic, latestEpic] = await Promise.all([
++    jiraPost('/rest/api/3/search/approximate-count', { jql: base }),
++    jiraPost('/rest/api/3/search/approximate-count', { jql: `${base} AND statusCategory = Done` }),
++    jiraPost('/rest/api/3/search/approximate-count', { jql: `${base} AND status = "Blocked"` }),
++    jiraPost('/rest/api/3/search/approximate-count', { jql: `${base} AND statusCategory = "In Progress"` }),
++    // Earliest epic start date for this project, used to power the Projects
++    // table's Start column and the date-range filter (previously always
++    // empty because getProjects never returned any date fields).
++    jiraGet('/rest/api/3/search/jql', {
++      jql: `${base} AND issuetype = Epic AND cf[10015] is not EMPTY ORDER BY cf[10015] ASC`,
++      maxResults: '1',
++      fields: 'customfield_10015',
++    }),
++    // Latest epic due date for this project, used for the Due column / filter.
++    jiraGet('/rest/api/3/search/jql', {
++      jql: `${base} AND issuetype = Epic AND duedate is not EMPTY ORDER BY duedate DESC`,
++      maxResults: '1',
++      fields: 'duedate',
++    }),
+   ]);
+ 
+   return {
+-    total: all.total ?? 0,
+-    done: done.total ?? 0,
+-    blocked: blocked.total ?? 0,
+-    inProgress: inProgress.total ?? 0,
++    total: all.count ?? 0,
++    done: done.count ?? 0,
++    blocked: blocked.count ?? 0,
++    inProgress: inProgress.count ?? 0,
++    startDate: earliestEpic.issues?.[0]?.fields?.customfield_10015 ?? null,
++    dueDate: latestEpic.issues?.[0]?.fields?.duedate ?? null,
+   };
+ });
+ 
+@@ -89,7 +129,7 @@ resolver.define('getIssueDependencies', async ({ payload }) => {
+   if (!projectKeys?.length) return [];
+ 
+   const jql = `project in (${projectKeys.join(',')}) AND issuetype in (Epic, Story) ORDER BY created DESC`;
+-  const data = await jiraGet('/rest/api/3/search', {
++  const data = await jiraGet('/rest/api/3/search/jql', {
+     jql,
+     maxResults: '100',
+     fields: 'summary,status,issuetype,project,issuelinks,assignee,priority'
+@@ -117,7 +157,7 @@ resolver.define('getRoadmapEpics', async ({ payload }) => {
+   if (!projectKeys?.length) return [];
+ 
+   const jql = `project in (${projectKeys.join(',')}) AND issuetype = Epic ORDER BY duedate ASC`;
+-  const data = await jiraGet('/rest/api/3/search', {
++  const data = await jiraGet('/rest/api/3/search/jql', {
+     jql,
+     maxResults: '100',
+     fields: 'summary,status,project,duedate,customfield_10015,assignee'
+diff --git a/src/index.test.js b/src/index.test.js
+index a3a388c..df89d0a 100644
+--- a/src/index.test.js
++++ b/src/index.test.js
+@@ -122,27 +122,63 @@ describe('getProjects', () => {
+ describe('getProjectStats', () => {
+   const payload = { projectKey: 'TEST' };
+ 
+-  it('returns stats from four JQL queries', async () => {
+-    [{ total: 10 }, { total: 5 }, { total: 2 }, { total: 3 }].forEach(mockJiraResponse);
++  it('returns stats from four approximate-count calls plus epic date range', async () => {
++    // Order matches the Promise.all in getProjectStats: all, done, blocked,
++    // inProgress (approximate-count POSTs), then earliestEpic, latestEpic (GETs).
++    [
++      { count: 10 },
++      { count: 5 },
++      { count: 2 },
++      { count: 3 },
++      { issues: [{ fields: { customfield_10015: '2024-01-01' } }] },
++      { issues: [{ fields: { duedate: '2024-12-31' } }] },
++    ].forEach(mockJiraResponse);
+ 
+     const result = await getResolver('getProjectStats')({ payload });
+ 
+-    expect(requestJiraMock).toHaveBeenCalledTimes(4);
+-    const calls = requestJiraMock.mock.calls.map(([url]) => url);
++    expect(requestJiraMock).toHaveBeenCalledTimes(6);
++    const calls = requestJiraMock.mock.calls;
+ 
+-    // URLSearchParams encodes spaces as '+' instead of '%20'
+-    expect(calls[0]).toContain('jql=project%20%3D%20%22TEST%22&maxResults=0');
+-    expect(calls[1]).toContain('statusCategory%20%3D%20Done');
+-    expect(calls[2]).toContain('status%20%3D%20%22Blocked%22');
+-    expect(calls[3]).toContain('statusCategory%20%3D%20%22In%20Progress%22');
+-
+-    expect(result).toEqual({ total: 10, done: 5, blocked: 2, inProgress: 3 });
++    // The four count calls should hit approximate-count via POST with the JQL in the body.
++    for (const [url, options] of calls.slice(0, 4)) {
++      expect(url).toBe('/rest/api/3/search/approximate-count');
++      expect(options.method).toBe('POST');
++    }
++    const bodies = calls.slice(0, 4).map(([, options]) => JSON.parse(options.body).jql);
++    expect(bodies[0]).toBe('project = "TEST"');
++    expect(bodies[1]).toContain('statusCategory = Done');
++    expect(bodies[2]).toContain('status = "Blocked"');
++    expect(bodies[3]).toContain('statusCategory = "In Progress"');
++
++    // The date-range calls should hit the new search/jql endpoint.
++    expect(calls[4][0]).toContain('/rest/api/3/search/jql');
++    expect(calls[4][0]).toContain('cf%5B10015%5D');
++    expect(calls[5][0]).toContain('/rest/api/3/search/jql');
++    expect(calls[5][0]).toContain('duedate');
++
++    expect(result).toEqual({
++      total: 10,
++      done: 5,
++      blocked: 2,
++      inProgress: 3,
++      startDate: '2024-01-01',
++      dueDate: '2024-12-31',
++    });
+   });
+ 
+-  it('defaults missing totals to 0', async () => {
++  it('defaults missing counts and dates to 0/null', async () => {
+     for (let i = 0; i < 4; i++) mockJiraResponse({});
++    mockJiraResponse({ issues: [] });
++    mockJiraResponse({ issues: [] });
+     const result = await getResolver('getProjectStats')({ payload });
+-    expect(result).toEqual({ total: 0, done: 0, blocked: 0, inProgress: 0 });
++    expect(result).toEqual({
++      total: 0,
++      done: 0,
++      blocked: 0,
++      inProgress: 0,
++      startDate: null,
++      dueDate: null,
++    });
+   });
+ });
+ 
+diff --git a/static/portfolio-ui/__mocks__/@forge/bridge.js b/static/portfolio-ui/__mocks__/@forge/bridge.js
+index 54daa8f..8d8d0cb 100644
+--- a/static/portfolio-ui/__mocks__/@forge/bridge.js
++++ b/static/portfolio-ui/__mocks__/@forge/bridge.js
+@@ -7,4 +7,11 @@ export const invoke = jest.fn().mockImplementation((funcKey, payload) => {
+     });
+   }
+   return Promise.resolve({});
+-});
+\ No newline at end of file
++});
++
++export const router = {
++  open: jest.fn().mockResolvedValue(undefined),
++  navigate: jest.fn().mockResolvedValue(undefined),
++  getUrl: jest.fn().mockResolvedValue(new URL('https://example.atlassian.net/')),
++  reload: jest.fn(),
++};
+\ No newline at end of file
+diff --git a/static/portfolio-ui/src/App.jsx b/static/portfolio-ui/src/App.jsx
+index 0778010..7ec2895 100644
+--- a/static/portfolio-ui/src/App.jsx
++++ b/static/portfolio-ui/src/App.jsx
+@@ -1,9 +1,31 @@
+ import { useEffect, useMemo, useState } from 'react';
+-import { invoke } from '@forge/bridge';
++import { invoke, router } from '@forge/bridge';
+ import './App.css';
+ 
+ const TABS = ['projects', 'dependencies', 'roadmap'];
+ 
++// Builds the JQL used to open the Jira issue navigator for a given
++// project + status filter combo (mirrors the JQL used by getProjectStats).
++function jqlForProjectStatus(projectKey, status) {
++  const base = `project = "${projectKey}"`;
++  switch (status) {
++    case 'blocked':
++      return `${base} AND status = "Blocked"`;
++    case 'done':
++      return `${base} AND statusCategory = Done`;
++    case 'inProgress':
++      return `${base} AND statusCategory = "In Progress"`;
++    default:
++      return base;
++  }
++}
++
++// Opens the Jira issue navigator, pre-filtered by the given JQL, in a new tab.
++function openIssuesInJira(projectKey, status) {
++  const jql = jqlForProjectStatus(projectKey, status);
++  router.open(`/issues/?jql=${encodeURIComponent(jql)}`);
++}
++
+ async function invokeWithRetry(cmd, payload = {}, retries = 3, delay = 150) {
+   try {
+     return await invoke(cmd, payload);
+@@ -487,10 +509,8 @@ export default function App() {
+                         {p.avatarUrl && <img src={p.avatarUrl} alt="" className="avatar" />}
+                         <button
+                           onClick={() => {
+-                            // Navigate to project detail or filtered issues
+-                            window.dispatchEvent(new CustomEvent('portfolio:navigate:project', {
+-                              detail: { projectKey: p.key, projectName: p.name }
+-                            }));
++                            // Navigate to the project's summary page in Jira.
++                            router.open(`/jira/projects/${encodeURIComponent(p.key)}/summary`);
+                             setSrAnnouncement(`Navigated to ${p.name}`);
+                           }}
+                           style={{
+@@ -532,9 +552,7 @@ export default function App() {
+                         <button
+                           data-testid={`stats-total-${p.key}`}
+                           onClick={() => {
+-                            window.dispatchEvent(new CustomEvent('portfolio:navigate:issues', {
+-                              detail: { projectKey: p.key, status: 'all' }
+-                            }));
++                            openIssuesInJira(p.key, 'all');
+                             setSrAnnouncement(`Viewing all issues for ${p.key}`);
+                           }}
+                           style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit' }}
+@@ -550,9 +568,7 @@ export default function App() {
+                         <button
+                           data-testid={`stats-inprogress-${p.key}`}
+                           onClick={() => {
+-                            window.dispatchEvent(new CustomEvent('portfolio:navigate:issues', {
+-                              detail: { projectKey: p.key, status: 'inProgress' }
+-                            }));
++                            openIssuesInJira(p.key, 'inProgress');
+                             setSrAnnouncement(`Viewing in-progress issues for ${p.key}`);
+                           }}
+                           style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit' }}
+@@ -568,9 +584,7 @@ export default function App() {
+                         <button
+                           data-testid={`stats-done-${p.key}`}
+                           onClick={() => {
+-                            window.dispatchEvent(new CustomEvent('portfolio:navigate:issues', {
+-                              detail: { projectKey: p.key, status: 'done' }
+-                            }));
++                            openIssuesInJira(p.key, 'done');
+                             setSrAnnouncement(`Viewing done issues for ${p.key}`);
+                           }}
+                           style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit' }}
+@@ -587,9 +601,7 @@ export default function App() {
+                           <button
+                             data-testid={`stats-blocked-${p.key}`}
+                             onClick={() => {
+-                              window.dispatchEvent(new CustomEvent('portfolio:navigate:issues', {
+-                                detail: { projectKey: p.key, status: 'blocked' }
+-                              }));
++                              openIssuesInJira(p.key, 'blocked');
+                               setSrAnnouncement(`Viewing blocked issues for ${p.key}`);
+                             }}
+                             className="blocked-flag"
+diff --git a/static/portfolio-ui/src/App.test.jsx b/static/portfolio-ui/src/App.test.jsx
+index fd80acc..69b1424 100644
+--- a/static/portfolio-ui/src/App.test.jsx
++++ b/static/portfolio-ui/src/App.test.jsx
+@@ -2,10 +2,16 @@ import React from 'react';
+ import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+ import '@testing-library/jest-dom';
+ import App from './App';
+-import { invoke } from '@forge/bridge';
++import { invoke, router } from '@forge/bridge';
+ 
+ jest.mock('@forge/bridge', () => ({
+   invoke: jest.fn(),
++  router: {
++    open: jest.fn().mockResolvedValue(undefined),
++    navigate: jest.fn().mockResolvedValue(undefined),
++    getUrl: jest.fn().mockResolvedValue(new URL('https://example.atlassian.net/')),
++    reload: jest.fn(),
++  },
+ }));
+ 
+ // Suppress expected React warnings in tests
+@@ -191,9 +197,7 @@ describe('App', () => {
+     });
+ 
+     // ── NEW: Project Navigation Click Tests ────────────────────────────
+-    it('dispatches navigation event when clicking project name', async () => {
+-      const dispatchSpy = jest.spyOn(window, 'dispatchEvent').mockImplementation(() => true);
+-      
++    it('navigates to the Jira project page when clicking project name', async () => {
+       render(<App />);
+       await waitFor(() => screen.getByText('Alpha'));
+       
+@@ -201,14 +205,7 @@ describe('App', () => {
+       const projectBtn = screen.getByRole('button', { name: /Alpha \(PROJ1\)/i });
+       fireEvent.click(projectBtn);
+       
+-      expect(dispatchSpy).toHaveBeenCalledWith(
+-        expect.objectContaining({
+-          type: 'portfolio:navigate:project',
+-          detail: { projectKey: 'PROJ1', projectName: 'Alpha' }
+-        })
+-      );
+-      
+-      dispatchSpy.mockRestore();
++      expect(router.open).toHaveBeenCalledWith('/jira/projects/PROJ1/summary');
+     });
+ 
+     it('announces navigation via ARIA live region', async () => {
+@@ -682,22 +679,15 @@ describe('App', () => {
+       });
+     });
+ 
+-    it('should make stats numbers clickable and dispatch events', async () => {
+-      const dispatchSpy = jest.spyOn(window, 'dispatchEvent').mockImplementation(() => true);
+-      
++    it('should make stats numbers clickable and navigate to the issue navigator', async () => {
+       render(<App />);
+       await waitFor(() => screen.getByTestId('stats-total-PROJ1'));
+       
+       fireEvent.click(screen.getByTestId('stats-total-PROJ1'));
+       
+-      expect(dispatchSpy).toHaveBeenCalledWith(
+-        expect.objectContaining({
+-          type: 'portfolio:navigate:issues',
+-          detail: { projectKey: 'PROJ1', status: 'all' }
+-        })
++      expect(router.open).toHaveBeenCalledWith(
++        `/issues/?jql=${encodeURIComponent('project = "PROJ1"')}`
+       );
+-      
+-      dispatchSpy.mockRestore();
+     });
+ 
+     it('should filter by status: blocked', async () => {

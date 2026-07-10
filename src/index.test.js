@@ -122,27 +122,63 @@ describe('getProjects', () => {
 describe('getProjectStats', () => {
   const payload = { projectKey: 'TEST' };
 
-  it('returns stats from four JQL queries', async () => {
-    [{ total: 10 }, { total: 5 }, { total: 2 }, { total: 3 }].forEach(mockJiraResponse);
+  it('returns stats from four approximate-count calls plus epic date range', async () => {
+    // Order matches the Promise.all in getProjectStats: all, done, blocked,
+    // inProgress (approximate-count POSTs), then earliestEpic, latestEpic (GETs).
+    [
+      { count: 10 },
+      { count: 5 },
+      { count: 2 },
+      { count: 3 },
+      { issues: [{ fields: { customfield_10015: '2024-01-01' } }] },
+      { issues: [{ fields: { duedate: '2024-12-31' } }] },
+    ].forEach(mockJiraResponse);
 
     const result = await getResolver('getProjectStats')({ payload });
 
-    expect(requestJiraMock).toHaveBeenCalledTimes(4);
-    const calls = requestJiraMock.mock.calls.map(([url]) => url);
+    expect(requestJiraMock).toHaveBeenCalledTimes(6);
+    const calls = requestJiraMock.mock.calls;
 
-    // URLSearchParams encodes spaces as '+' instead of '%20'
-    expect(calls[0]).toContain('jql=project%20%3D%20%22TEST%22&maxResults=0');
-    expect(calls[1]).toContain('statusCategory%20%3D%20Done');
-    expect(calls[2]).toContain('status%20%3D%20%22Blocked%22');
-    expect(calls[3]).toContain('statusCategory%20%3D%20%22In%20Progress%22');
+    // The four count calls should hit approximate-count via POST with the JQL in the body.
+    for (const [url, options] of calls.slice(0, 4)) {
+      expect(url).toBe('/rest/api/3/search/approximate-count');
+      expect(options.method).toBe('POST');
+    }
+    const bodies = calls.slice(0, 4).map(([, options]) => JSON.parse(options.body).jql);
+    expect(bodies[0]).toBe('project = "TEST"');
+    expect(bodies[1]).toContain('statusCategory = Done');
+    expect(bodies[2]).toContain('status = "Blocked"');
+    expect(bodies[3]).toContain('statusCategory = "In Progress"');
 
-    expect(result).toEqual({ total: 10, done: 5, blocked: 2, inProgress: 3 });
+    // The date-range calls should hit the new search/jql endpoint.
+    expect(calls[4][0]).toContain('/rest/api/3/search/jql');
+    expect(calls[4][0]).toContain('cf%5B10015%5D');
+    expect(calls[5][0]).toContain('/rest/api/3/search/jql');
+    expect(calls[5][0]).toContain('duedate');
+
+    expect(result).toEqual({
+      total: 10,
+      done: 5,
+      blocked: 2,
+      inProgress: 3,
+      startDate: '2024-01-01',
+      dueDate: '2024-12-31',
+    });
   });
 
-  it('defaults missing totals to 0', async () => {
+  it('defaults missing counts and dates to 0/null', async () => {
     for (let i = 0; i < 4; i++) mockJiraResponse({});
+    mockJiraResponse({ issues: [] });
+    mockJiraResponse({ issues: [] });
     const result = await getResolver('getProjectStats')({ payload });
-    expect(result).toEqual({ total: 0, done: 0, blocked: 0, inProgress: 0 });
+    expect(result).toEqual({
+      total: 0,
+      done: 0,
+      blocked: 0,
+      inProgress: 0,
+      startDate: null,
+      dueDate: null,
+    });
   });
 });
 

@@ -8,3 +8,10 @@ export const invoke = jest.fn().mockImplementation((funcKey, payload) => {
   }
   return Promise.resolve({});
 });
+
+export const router = {
+  open: jest.fn().mockResolvedValue(undefined),
+  navigate: jest.fn().mockResolvedValue(undefined),
+  getUrl: jest.fn().mockResolvedValue(new URL('https://example.atlassian.net/')),
+  reload: jest.fn(),
+};

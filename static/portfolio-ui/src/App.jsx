@@ -1,8 +1,30 @@
 import { useEffect, useMemo, useState } from 'react';
-import { invoke } from '@forge/bridge';
+import { invoke, router } from '@forge/bridge';
 import './App.css';
 
 const TABS = ['projects', 'dependencies', 'roadmap'];
+
+// Builds the JQL used to open the Jira issue navigator for a given
+// project + status filter combo (mirrors the JQL used by getProjectStats).
+function jqlForProjectStatus(projectKey, status) {
+  const base = `project = "${projectKey}"`;
+  switch (status) {
+    case 'blocked':
+      return `${base} AND status = "Blocked"`;
+    case 'done':
+      return `${base} AND statusCategory = Done`;
+    case 'inProgress':
+      return `${base} AND statusCategory = "In Progress"`;
+    default:
+      return base;
+  }
+}
+
+// Opens the Jira issue navigator, pre-filtered by the given JQL, in a new tab.
+function openIssuesInJira(projectKey, status) {
+  const jql = jqlForProjectStatus(projectKey, status);
+  router.open(`/issues/?jql=${encodeURIComponent(jql)}`);
+}
 
 async function invokeWithRetry(cmd, payload = {}, retries = 3, delay = 150) {
   try {
@@ -487,10 +509,8 @@ export default function App() {
                         {p.avatarUrl && <img src={p.avatarUrl} alt="" className="avatar" />}
                         <button
                           onClick={() => {
-                            // Navigate to project detail or filtered issues
-                            window.dispatchEvent(new CustomEvent('portfolio:navigate:project', {
-                              detail: { projectKey: p.key, projectName: p.name }
-                            }));
+                            // Navigate to the project's summary page in Jira.
+                            router.open(`/jira/projects/${encodeURIComponent(p.key)}/summary`);
                             setSrAnnouncement(`Navigated to ${p.name}`);
                           }}
                           style={{
@@ -532,9 +552,7 @@ export default function App() {
                         <button
                           data-testid={`stats-total-${p.key}`}
                           onClick={() => {
-                            window.dispatchEvent(new CustomEvent('portfolio:navigate:issues', {
-                              detail: { projectKey: p.key, status: 'all' }
-                            }));
+                            openIssuesInJira(p.key, 'all');
                             setSrAnnouncement(`Viewing all issues for ${p.key}`);
                           }}
                           style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit' }}
@@ -550,9 +568,7 @@ export default function App() {
                         <button
                           data-testid={`stats-inprogress-${p.key}`}
                           onClick={() => {
-                            window.dispatchEvent(new CustomEvent('portfolio:navigate:issues', {
-                              detail: { projectKey: p.key, status: 'inProgress' }
-                            }));
+                            openIssuesInJira(p.key, 'inProgress');
                             setSrAnnouncement(`Viewing in-progress issues for ${p.key}`);
                           }}
                           style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit' }}
@@ -568,9 +584,7 @@ export default function App() {
                         <button
                           data-testid={`stats-done-${p.key}`}
                           onClick={() => {
-                            window.dispatchEvent(new CustomEvent('portfolio:navigate:issues', {
-                              detail: { projectKey: p.key, status: 'done' }
-                            }));
+                            openIssuesInJira(p.key, 'done');
                             setSrAnnouncement(`Viewing done issues for ${p.key}`);
                           }}
                           style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit' }}
@@ -587,9 +601,7 @@ export default function App() {
                           <button
                             data-testid={`stats-blocked-${p.key}`}
                             onClick={() => {
-                              window.dispatchEvent(new CustomEvent('portfolio:navigate:issues', {
-                                detail: { projectKey: p.key, status: 'blocked' }
-                              }));
+                              openIssuesInJira(p.key, 'blocked');
                               setSrAnnouncement(`Viewing blocked issues for ${p.key}`);
                             }}
                             className="blocked-flag"
