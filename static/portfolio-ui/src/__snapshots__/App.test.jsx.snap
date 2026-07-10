@@ -1,0 +1,225 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`App Advanced Features matches projects table snapshot 1`] = `
+<table
+  class="projects-table"
+  style="width: 100%; display: table;"
+>
+  <thead>
+    <tr>
+      <th
+        style="cursor: pointer; user-select: none;"
+        title="Sort by Project"
+      >
+        Project
+         ▲
+      </th>
+      <th
+        style="cursor: pointer; user-select: none;"
+        title="Sort by Lead"
+      >
+        Lead
+      </th>
+      <th
+        style="cursor: pointer; user-select: none;"
+        title="Sort by Start"
+      >
+        Start
+      </th>
+      <th
+        style="cursor: pointer; user-select: none;"
+        title="Sort by Due"
+      >
+        Due
+      </th>
+      <th
+        style="cursor: pointer; user-select: none;"
+        title="Sort by Total"
+      >
+        Total
+      </th>
+      <th
+        style="cursor: pointer; user-select: none;"
+        title="Sort by In Progress"
+      >
+        In Progress
+      </th>
+        
+      <th
+        style="cursor: pointer; user-select: none;"
+        title="Sort by Done"
+      >
+        Done
+      </th>
+      <th
+        style="cursor: pointer; user-select: none;"
+        title="Sort by Blocked"
+      >
+        Blocked
+      </th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td
+        class="project-cell"
+      >
+        <img
+          alt=""
+          class="avatar"
+          src="avatar1.png"
+        />
+        <button
+          style="background: none; color: rgb(0, 82, 204); cursor: pointer; text-decoration: underline; padding: 0px;"
+          title="View Alpha details"
+        >
+          Alpha
+           
+          <small>
+            (
+            PROJ1
+            )
+          </small>
+        </button>
+      </td>
+      <td>
+        <button
+          class="lead-link"
+          style="background: none; color: rgb(0, 82, 204); cursor: pointer; text-decoration: underline; padding: 0px;"
+          title="Filter projects by John Doe"
+        >
+          John Doe
+        </button>
+      </td>
+      <td>
+        Jan 1, 2024
+      </td>
+      <td>
+        Jun 1, 2024
+      </td>
+      <td
+        class="stats-cell"
+      >
+        <button
+          aria-label="View all 10 issues for PROJ1"
+          data-testid="stats-total-PROJ1"
+          style="background: none; cursor: pointer;"
+          title="View all 10 issues for PROJ1"
+        >
+          10
+        </button>
+      </td>
+      <td
+        class="stats-cell"
+      >
+        <button
+          aria-label="View 4 in-progress issues for PROJ1"
+          data-testid="stats-inprogress-PROJ1"
+          style="background: none; cursor: pointer;"
+          title="View 4 in-progress issues for PROJ1"
+        >
+          4
+        </button>
+      </td>
+      <td
+        class="stats-cell"
+      >
+        <button
+          aria-label="View 5 done issues for PROJ1"
+          data-testid="stats-done-PROJ1"
+          style="background: none; cursor: pointer;"
+          title="View 5 done issues for PROJ1"
+        >
+          5
+        </button>
+      </td>
+      <td
+        class="stats-cell"
+        data-testid="blocked-PROJ1"
+      >
+        <button
+          class="blocked-flag"
+          data-testid="stats-blocked-PROJ1"
+          style="background: rgb(255, 227, 128); color: rgb(23, 43, 77); cursor: pointer; padding: 4px 8px; border-radius: 3px; font-weight: bold; font-size: 12px;"
+          title="View 1 blocked issues for PROJ1"
+        >
+          1
+        </button>
+      </td>
+    </tr>
+    <tr>
+      <td
+        class="project-cell"
+      >
+        <button
+          style="background: none; color: rgb(0, 82, 204); cursor: pointer; text-decoration: underline; padding: 0px;"
+          title="View Beta details"
+        >
+          Beta
+           
+          <small>
+            (
+            PROJ2
+            )
+          </small>
+        </button>
+      </td>
+      <td>
+        Unassigned
+      </td>
+      <td>
+        Mar 1, 2024
+      </td>
+      <td>
+        Sep 1, 2024
+      </td>
+      <td
+        class="stats-cell"
+      >
+        <button
+          aria-label="View all 3 issues for PROJ2"
+          data-testid="stats-total-PROJ2"
+          style="background: none; cursor: pointer;"
+          title="View all 3 issues for PROJ2"
+        >
+          3
+        </button>
+      </td>
+      <td
+        class="stats-cell"
+      >
+        <button
+          aria-label="View 3 in-progress issues for PROJ2"
+          data-testid="stats-inprogress-PROJ2"
+          style="background: none; cursor: pointer;"
+          title="View 3 in-progress issues for PROJ2"
+        >
+          3
+        </button>
+      </td>
+      <td
+        class="stats-cell"
+      >
+        <button
+          aria-label="View 0 done issues for PROJ2"
+          data-testid="stats-done-PROJ2"
+          style="background: none; cursor: pointer;"
+          title="View 0 done issues for PROJ2"
+        >
+          0
+        </button>
+      </td>
+      <td
+        class="stats-cell"
+        data-testid="blocked-PROJ2"
+      >
+        <span
+          style="color: rgb(204, 204, 204);"
+        >
+          —
+        </span>
+      </td>
+    </tr>
+  </tbody>
+</table>
+`;
