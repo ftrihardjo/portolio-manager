@@ -713,24 +713,31 @@ describe('Advanced Search & Filtering', () => {
   it('should navigate when clicking stats numbers', () => {
     cy.visit('/', {
       onBeforeLoad(win) {
-        // ✅ Stub dispatchEvent BEFORE app loads
-        cy.stub(win, 'dispatchEvent').as('dispatchEvent').callThrough();
-        win.__bridge = forgeBridgeMock();
+        // Stub callBridge on the mock bridge itself — this is what
+        // @forge/bridge's router.open() ultimately calls under the hood
+        // (router.open -> callBridge('navigate', { url, type: 'new-tab' })).
+        const bridge = forgeBridgeMock();
+        cy.stub(bridge, 'callBridge').as('callBridge').callThrough();
+        win.__bridge = bridge;
       },
     });
-    
+
     // Wait for stats to load
     cy.contains('10').should('be.visible');
-    
+
     // Click the total stats button (using aria-label for accessibility)
     cy.get('button[aria-label="View all 10 issues for PROJ1"]').click();
-    
-    // Verify event was dispatched with correct detail
-    cy.get('@dispatchEvent').should('have.been.calledWithMatch', (event) => {
-      return event?.type === 'portfolio:navigate:issues' && 
-            event?.detail?.projectKey === 'PROJ1' &&
-            event?.detail?.status === 'all';
-    });
+
+    // Verify router.open() triggered a 'navigate' bridge call opening the
+    // issue navigator, filtered to this project, in a new tab.
+    cy.get('@callBridge').should(
+      'have.been.calledWith',
+      'navigate',
+      Cypress.sinon.match({
+        type: 'new-tab',
+        url: Cypress.sinon.match((url) => url.includes('/issues/?jql=') && url.includes('PROJ1')),
+      })
+    );
   });
 
   it('should filter by status: blocked projects', () => {
@@ -796,18 +803,24 @@ describe('Advanced Search & Filtering', () => {
   it('should navigate when clicking project name', () => {
     cy.visit('/', {
       onBeforeLoad(win) {
-        cy.stub(win, 'dispatchEvent').as('dispatchEvent').callThrough();
-        win.__bridge = forgeBridgeMock();
+        const bridge = forgeBridgeMock();
+        cy.stub(bridge, 'callBridge').as('callBridge').callThrough();
+        win.__bridge = bridge;
       },
     });
-    
+
     // Click on project name
     cy.contains('button', 'Alpha Project').click();
-    
-    // Verify navigation event was dispatched
-    cy.get('@dispatchEvent').should('have.been.calledWithMatch', (event) => {
-      return event?.type === 'portfolio:navigate:project' && 
-            event?.detail?.projectKey === 'PROJ1';
-    });
+
+    // Verify router.open() triggered a 'navigate' bridge call to the
+    // project's summary page in a new tab.
+    cy.get('@callBridge').should(
+      'have.been.calledWith',
+      'navigate',
+      Cypress.sinon.match({
+        type: 'new-tab',
+        url: '/jira/projects/PROJ1/summary',
+      })
+    );
   });
 });

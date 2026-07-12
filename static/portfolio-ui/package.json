@@ -6,8 +6,7 @@
   "dependencies": {
     "@atlaskit/css-reset": "^6.6.2",
     "@atlaskit/tokens": "^13.0.4",
-    "@forge/bridge": "^5.8.0",
-    "@forge/react": "^10.8.0",
+    "@forge/bridge": "^5.17.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^7.15.1",
@@ -27,7 +26,7 @@
     "date-fns": "^4.1.0",
     "identity-obj-proxy": "^3.0.0",
     "jest": "^27.5.1",
-    "react-scripts": "^0.0.0"
+    "react-scripts": "^5.0.1"
   },
   "overrides": {
     "tmp": "^0.2.6",
@@ -37,7 +36,8 @@
     "serialize-javascript": "^7.0.5",
     "underscore": "^1.13.8",
     "@tootallnate/once": "^2.0.1",
-    "qs": "^6.15.2"
+    "qs": "^6.15.2",
+    "linkify-it": "^5.0.2"
   },
   "scripts": {
     "start": "react-scripts start",
