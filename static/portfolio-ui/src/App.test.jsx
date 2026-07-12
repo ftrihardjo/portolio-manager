@@ -205,7 +205,9 @@ describe('App', () => {
       const projectBtn = screen.getByRole('button', { name: /Alpha \(PROJ1\)/i });
       fireEvent.click(projectBtn);
       
-      expect(router.open).toHaveBeenCalledWith('/jira/projects/PROJ1/summary');
+      expect(router.open).toHaveBeenCalledWith(
+        `/issues/?jql=${encodeURIComponent('project = "PROJ1"')}`
+      );
     });
 
     it('announces navigation via ARIA live region', async () => {

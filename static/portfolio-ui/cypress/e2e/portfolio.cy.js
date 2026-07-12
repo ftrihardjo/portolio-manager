@@ -819,7 +819,7 @@ describe('Advanced Search & Filtering', () => {
       'navigate',
       Cypress.sinon.match({
         type: 'new-tab',
-        url: '/jira/projects/PROJ1/summary',
+        url: Cypress.sinon.match((url) => url.includes('/issues/?jql=') && url.includes('PROJ1')),
       })
     );
   });

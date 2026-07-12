@@ -510,7 +510,7 @@ export default function App() {
                         <button
                           onClick={() => {
                             // Navigate to the project's summary page in Jira.
-                            router.open(`/jira/projects/${encodeURIComponent(p.key)}/summary`);
+                            openIssuesInJira(p.key, 'all');
                             setSrAnnouncement(`Navigated to ${p.name}`);
                           }}
                           style={{
