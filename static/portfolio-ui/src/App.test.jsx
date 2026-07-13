@@ -71,8 +71,8 @@ describe('App', () => {
       { id: 2, key: 'PROJ2', name: 'Beta', lead: null, avatarUrl: null, startDate: '2024-03-01', dueDate: '2024-09-01' },
     ];
     const statsMock = {
-      PROJ1: { total: 10, done: 5, blocked: 1, inProgress: 4 },
-      PROJ2: { total: 3, done: 0, blocked: 0, inProgress: 3 },
+      PROJ1: { total: 10, done: 5, blocked: 1, inProgress: 4, overdueEpics: 1, riskScore: 20 },
+      PROJ2: { total: 3, done: 0, blocked: 0, inProgress: 3, overdueEpics: 0, riskScore: 0 },
     };
 
     beforeEach(() => {
@@ -113,6 +113,30 @@ describe('App', () => {
       const blocked = await screen.findByTestId('stats-blocked-PROJ1');
       expect(blocked).toHaveClass('blocked-flag');
       expect(blocked).toHaveStyle({ background: '#ffe380' });
+    });
+
+    it('shows the risk score for each project, color-coded by severity', async () => {
+      render(<App />);
+      await waitFor(() => screen.getByText('Alpha'));
+
+      const risk1 = await screen.findByTestId('risk-PROJ1');
+      expect(risk1).toHaveTextContent('20');
+      // 20 is in the "low risk" band (< 34) — green.
+      expect(risk1.querySelector('span')).toHaveStyle({ background: '#e3fcef' });
+
+      const risk2 = screen.getByTestId('risk-PROJ2');
+      expect(risk2).toHaveTextContent('0');
+    });
+
+    it('sorts by risk score when the Risk column header is clicked', async () => {
+      render(<App />);
+      await waitFor(() => screen.getByText('Alpha'));
+
+      fireEvent.click(screen.getByText(/Risk/));
+      const rows = screen.getAllByRole('row').slice(1);
+      // PROJ2 (risk 0) should sort before PROJ1 (risk 20) ascending.
+      expect(rows[0]).toHaveTextContent(/PROJ2/);
+      expect(rows[1]).toHaveTextContent(/PROJ1/);
     });
 
     it('handles error when fetching projects fails', async () => {

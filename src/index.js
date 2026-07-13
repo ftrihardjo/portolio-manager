@@ -93,11 +93,15 @@ resolver.define('getProjectStats', async ({ payload }) => {
   // The legacy /rest/api/3/search endpoint (and its "total" field) has been
   // removed by Atlassian. Counts now come from the approximate-count endpoint,
   // and we no longer get a free "total" back from a plain issue search.
-  const [all, done, blocked, inProgress, earliestEpic, latestEpic] = await Promise.all([
+  const [all, done, blocked, inProgress, overdueEpics, earliestEpic, latestEpic] = await Promise.all([
     jiraPost('/rest/api/3/search/approximate-count', { jql: base }),
     jiraPost('/rest/api/3/search/approximate-count', { jql: `${base} AND statusCategory = Done` }),
     jiraPost('/rest/api/3/search/approximate-count', { jql: `${base} AND status = "Blocked"` }),
     jiraPost('/rest/api/3/search/approximate-count', { jql: `${base} AND statusCategory = "In Progress"` }),
+    // Epics past their due date that aren't done yet — feeds the risk score.
+    jiraPost('/rest/api/3/search/approximate-count', {
+      jql: `${base} AND issuetype = Epic AND duedate < now() AND statusCategory != Done`,
+    }),
     // Earliest epic start date for this project, used to power the Projects
     // table's Start column and the date-range filter (previously always
     // empty because getProjects never returned any date fields).
@@ -114,15 +118,33 @@ resolver.define('getProjectStats', async ({ payload }) => {
     }),
   ]);
 
+  const total = all.count ?? 0;
+  const blockedCount = blocked.count ?? 0;
+  const overdueCount = overdueEpics.count ?? 0;
+
+  // Risk score (0-100), documented so it's easy to audit and adjust:
+  //   - 50% weight: share of this project's issues currently Blocked.
+  //   - 50% weight: overdue epics, capped at 3 (a 4th+ overdue epic doesn't
+  //     make the project meaningfully riskier for scoring purposes, it's
+  //     already maxed out that component).
+  // This is a heuristic, not a statistically validated model — it's meant to
+  // give a quick at-a-glance signal, not a precise prediction.
+  const blockedRatio = total > 0 ? blockedCount / total : 0;
+  const overdueComponent = Math.min(overdueCount, 3) / 3;
+  const riskScore = Math.round(100 * (0.5 * blockedRatio + 0.5 * overdueComponent));
+
   return {
-    total: all.count ?? 0,
+    total,
     done: done.count ?? 0,
-    blocked: blocked.count ?? 0,
+    blocked: blockedCount,
     inProgress: inProgress.count ?? 0,
+    overdueEpics: overdueCount,
+    riskScore,
     startDate: earliestEpic.issues?.[0]?.fields?.customfield_10015 ?? null,
     dueDate: latestEpic.issues?.[0]?.fields?.duedate ?? null,
   };
 });
+
 
 resolver.define('getIssueDependencies', async ({ payload }) => {
   const { projectKeys } = payload;

@@ -57,6 +57,12 @@ exports[`App Advanced Features matches projects table snapshot 1`] = `
       >
         Blocked
       </th>
+      <th
+        style="cursor: pointer; user-select: none;"
+        title="Sort by Risk"
+      >
+        Risk
+      </th>
     </tr>
   </thead>
   <tbody>
@@ -146,6 +152,16 @@ exports[`App Advanced Features matches projects table snapshot 1`] = `
           1
         </button>
       </td>
+      <td
+        class="stats-cell"
+        data-testid="risk-PROJ1"
+      >
+        <span
+          style="color: rgb(204, 204, 204);"
+        >
+          —
+        </span>
+      </td>
     </tr>
     <tr>
       <td
@@ -212,6 +228,16 @@ exports[`App Advanced Features matches projects table snapshot 1`] = `
       <td
         class="stats-cell"
         data-testid="blocked-PROJ2"
+      >
+        <span
+          style="color: rgb(204, 204, 204);"
+        >
+          —
+        </span>
+      </td>
+      <td
+        class="stats-cell"
+        data-testid="risk-PROJ2"
       >
         <span
           style="color: rgb(204, 204, 204);"

@@ -297,6 +297,7 @@ export default function App() {
         case 'done':
         case 'blocked':
         case 'inProgress':
+        case 'riskScore':
           comparison = (a[sortBy] || 0) - (b[sortBy] || 0);
           break;
         default:
@@ -376,6 +377,19 @@ export default function App() {
   }, [dependencies]);
 
   const hasCircularDependency = circularDependencyPath !== null;
+
+  // Which projects have at least one issue in the detected cycle. Only
+  // known once dependency data has been fetched (i.e. after visiting the
+  // Dependencies tab) — this progressively enhances the Risk column rather
+  // than requiring an extra full-graph fetch just for the Projects tab.
+  const projectsInCircularDependency = useMemo(() => {
+    if (!circularDependencyPath) return new Set();
+    const cycleIds = new Set(circularDependencyPath);
+    const projectKeys = dependencies
+      .filter(issue => cycleIds.has(issue.id))
+      .map(issue => issue.project);
+    return new Set(projectKeys);
+  }, [circularDependencyPath, dependencies]);
 
   const processedEpics = useMemo(() => {
     return epics.map((epic, i, arr) => {
@@ -544,6 +558,7 @@ export default function App() {
                     <SortableHeader label="In Progress" sortKey="inProgress" currentSort={sortBy} order={sortOrder} onSort={handleSort} />  {/* ← ADD THIS */}
                     <SortableHeader label="Done"        sortKey="done"       currentSort={sortBy} order={sortOrder} onSort={handleSort} />
                     <SortableHeader label="Blocked"     sortKey="blocked"    currentSort={sortBy} order={sortOrder} onSort={handleSort} />
+                    <SortableHeader label="Risk"        sortKey="riskScore"  currentSort={sortBy} order={sortOrder} onSort={handleSort} />
                   </tr>
                 </thead>
                 <tbody>
@@ -670,6 +685,33 @@ export default function App() {
                           >
                             {p.blocked}
                           </button>
+                        ) : (
+                          <span style={{ color: '#ccc' }}>—</span>
+                        )}
+                      </td>
+
+                      {/* ── Risk Cell ── */}
+                      <td className="stats-cell" data-testid={`risk-${p.key}`}>
+                        {typeof p.riskScore === 'number' ? (
+                          <span
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '4px 8px',
+                              borderRadius: '3px',
+                              fontWeight: 'bold',
+                              fontSize: '12px',
+                              background: p.riskScore >= 67 ? '#ffebe6' : p.riskScore >= 34 ? '#fff8e6' : '#e3fcef',
+                              color: p.riskScore >= 67 ? '#bf2600' : p.riskScore >= 34 ? '#974f0c' : '#006644',
+                            }}
+                            title={`Risk score ${p.riskScore}/100 — based on blocked-issue ratio and overdue epics (${p.overdueEpics ?? 0} overdue)${projectsInCircularDependency.has(p.key) ? '. This project has issues in a circular dependency.' : ''}`}
+                          >
+                            {p.riskScore}
+                            {projectsInCircularDependency.has(p.key) && (
+                              <span aria-label="Involved in a circular dependency">⚠</span>
+                            )}
+                          </span>
                         ) : (
                           <span style={{ color: '#ccc' }}>—</span>
                         )}
