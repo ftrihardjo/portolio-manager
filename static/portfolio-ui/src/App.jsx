@@ -20,6 +20,13 @@ function jqlForProjectStatus(projectKey, status) {
   }
 }
 
+// Opens a single issue in the Jira issue view. Unlike project-level URLs
+// (which vary by project type — see openIssuesInJira's comment), /browse/
+// is a universal permalink that works for every issue and project type.
+function openIssueInJira(issueKey) {
+  router.open(`/browse/${encodeURIComponent(issueKey)}`);
+}
+
 // Opens the Jira issue navigator, pre-filtered by the given JQL, in a new tab.
 function openIssuesInJira(projectKey, status) {
   const jql = jqlForProjectStatus(projectKey, status);
@@ -253,6 +260,10 @@ export default function App() {
         // (or change to `return false` if you want to exclude them)
         if (!p.startDate && !p.dueDate) return true; 
         
+        // Normalize in case the user (or a date-input quirk) picked an
+        // inverted range (end before start) — without this, the two
+        // one-sided overlap checks below become strictly weaker than
+        // intended and let projects through that shouldn't match.
         const rawStart = new Date(dateFilter.start);
         const rawEnd = new Date(dateFilter.end);
         const filterStart = rawStart <= rawEnd ? rawStart : rawEnd;
@@ -439,7 +450,9 @@ export default function App() {
         </div>
       )}
 
-      {activeTab === 'projects' && (<div className="global-filters" style={{ display: 'flex', gap: '15px', padding: '10px 20px' }}>
+      <div className="global-filters" style={{ display: 'flex', gap: '15px', padding: '10px 20px' }}>
+        {activeTab === 'projects' && (
+          <>
             <input
               type="text"
               data-testid="search-projects"
@@ -457,59 +470,63 @@ export default function App() {
                 <option key={lead} value={lead}>{lead}</option>
               ))}
             </select>
-            <button onClick={() => setLayoutDir(prev => prev === 'ltr' ? 'rtl' : 'ltr')} style={{ fontSize: '11px' }}>
-              Toggle Language Direction
-            </button>
-          </div>)}
+          </>
+        )}
+        <button onClick={() => setLayoutDir(prev => prev === 'ltr' ? 'rtl' : 'ltr')} style={{ fontSize: '11px' }}>
+          Toggle Language Direction
+        </button>
+      </div>
 
-          {activeTab === 'projects' && (<div className="advanced-filters" style={{ display: 'flex', gap: '10px', padding: '0 20px 10px', flexWrap: 'wrap' }}>
-                 <input
-                   type="text"
-                   placeholder="Search by lead..."
-                   value={leadSearch}
-                   onChange={(e) => setLeadSearch(e.target.value)}
-                   style={{ minWidth: '150px' }}
-                   aria-label="Search projects by lead name"
-                 />
-                 <select
-                   value={statusFilter}
-                   onChange={(e) => setStatusFilter(e.target.value)}
-                   aria-label="Filter by project status"
-                 >
-                   <option value="">All Statuses</option>
-                   <option value="done">Completed</option>
-                   <option value="inProgress">In Progress</option>
-                   <option value="blocked">Has Blocked Items</option>
-                 </select>
-                 <input
-                   type="date"
-                   value={dateFilter.start}
-                   max={dateFilter.end || undefined}
-                   onChange={(e) => setDateFilter(prev => ({ ...prev, start: e.target.value }))}
-                   placeholder="Start date"
-                   aria-label="Filter by start date from"
-                 />
-                 <span style={{ alignSelf: 'center' }}>to</span>
-                 <input
-                   type="date"
-                   min={dateFilter.start || undefined}
-                   value={dateFilter.end}
-                   onChange={(e) => setDateFilter(prev => ({ ...prev, end: e.target.value }))}
-                   placeholder="End date"
-                   aria-label="Filter by start date to"
-                 />
-                 <button
-                   onClick={() => {
-                     setLeadSearch('');
-                     setStatusFilter('');
-                     setDateFilter({ start: '', end: '' });
-                     setSrAnnouncement('Filters cleared');
-                   }}
-                   style={{ fontSize: '12px' }}
-                 >
-                   Clear Filters
-                 </button>
-    </div>)}
+      {activeTab === 'projects' && (
+        <div className="advanced-filters" style={{ display: 'flex', gap: '10px', padding: '0 20px 10px', flexWrap: 'wrap' }}>
+          <input
+            type="text"
+            placeholder="Search by lead..."
+            value={leadSearch}
+            onChange={(e) => setLeadSearch(e.target.value)}
+            style={{ minWidth: '150px' }}
+            aria-label="Search projects by lead name"
+          />
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            aria-label="Filter by project status"
+          >
+            <option value="">All Statuses</option>
+            <option value="done">Completed</option>
+            <option value="inProgress">In Progress</option>
+            <option value="blocked">Has Blocked Items</option>
+          </select>
+          <input
+            type="date"
+            value={dateFilter.start}
+            onChange={(e) => setDateFilter(prev => ({ ...prev, start: e.target.value }))}
+            placeholder="Start date"
+            aria-label="Filter by start date from"
+            max={dateFilter.end || undefined}
+          />
+          <span style={{ alignSelf: 'center' }}>to</span>
+          <input
+            type="date"
+            value={dateFilter.end}
+            onChange={(e) => setDateFilter(prev => ({ ...prev, end: e.target.value }))}
+            placeholder="End date"
+            aria-label="Filter by start date to"
+            min={dateFilter.start || undefined}
+          />
+          <button
+            onClick={() => {
+              setLeadSearch('');
+              setStatusFilter('');
+              setDateFilter({ start: '', end: '' });
+              setSrAnnouncement('Filters cleared');
+            }}
+            style={{ fontSize: '12px' }}
+          >
+            Clear Filters
+          </button>
+        </div>
+      )}
 
       <main className="app-content">
         {activeTab === 'projects' && (
@@ -536,7 +553,14 @@ export default function App() {
                         {p.avatarUrl && <img src={p.avatarUrl} alt="" className="avatar" />}
                         <button
                           onClick={() => {
-                            // Navigate to the project's summary page in Jira.
+                            // Open this project's issues in the Jira issue
+                            // navigator. (A generic "project summary" URL
+                            // varies by project type — software/business/
+                            // service-desk/product-discovery projects all
+                            // use different paths — and Forge's router
+                            // doesn't expose a NavigationLocation target for
+                            // it, so we route to the one destination that's
+                            // guaranteed to exist for every project type.)
                             openIssuesInJira(p.key, 'all');
                             setSrAnnouncement(`Navigated to ${p.name}`);
                           }}
@@ -715,7 +739,22 @@ export default function App() {
                       marginBottom: '10px',
                       borderRadius: '4px'
                     }}>
-                      <strong>{issue.id}</strong> — {issue.title}
+                      <button
+                        onClick={() => openIssueInJira(issue.id)}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: '#0052cc',
+                          cursor: 'pointer',
+                          textDecoration: 'underline',
+                          padding: 0,
+                          font: 'inherit',
+                          fontWeight: 'bold',
+                        }}
+                        aria-label={`Open ${issue.id} in Jira`}
+                      >
+                        {issue.id}
+                      </button> — {issue.title}
                       <div className="node-meta" style={{ fontSize: '12px', color: '#666', marginTop: '5px' }}>
                         <span className={`type-badge ${issue.type}`}>{issue.type}</span>
                         <span className={`status-badge ${issue.statusCategory}`} style={{ marginLeft: '10px' }}>
@@ -728,13 +767,27 @@ export default function App() {
                             <li key={idx}>
                               {link.outward && (
                                 <span>
-                                  {link.outwardLabel || link.type}: {link.outward}
+                                  {link.outwardLabel || link.type}:{' '}
+                                  <button
+                                    onClick={() => openIssueInJira(link.outward)}
+                                    style={{ background: 'none', border: 'none', color: '#0052cc', cursor: 'pointer', textDecoration: 'underline', padding: 0, font: 'inherit' }}
+                                    aria-label={`Open ${link.outward} in Jira`}
+                                  >
+                                    {link.outward}
+                                  </button>
                                   <span className="dependency-arrow" style={{ padding: '0 5px', color: '#0052cc' }}>→</span>
                                 </span>
                               )}
                               {link.inward && (
                                 <span>
-                                  {link.inwardLabel || link.type}: {link.inward}
+                                  {link.inwardLabel || link.type}:{' '}
+                                  <button
+                                    onClick={() => openIssueInJira(link.inward)}
+                                    style={{ background: 'none', border: 'none', color: '#0052cc', cursor: 'pointer', textDecoration: 'underline', padding: 0, font: 'inherit' }}
+                                    aria-label={`Open ${link.inward} in Jira`}
+                                  >
+                                    {link.inward}
+                                  </button>
                                   <span className="dependency-arrow" style={{ padding: '0 5px', color: '#0052cc' }}>←</span>
                                 </span>
                               )}
@@ -792,7 +845,22 @@ export default function App() {
                         }}
                       >
                         <div className="timeline-content">
-                          <strong>{epic.id}</strong> {epic.title}
+                          <button
+                            onClick={() => openIssueInJira(epic.id)}
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              color: '#0052cc',
+                              cursor: 'pointer',
+                              textDecoration: 'underline',
+                              padding: 0,
+                              font: 'inherit',
+                              fontWeight: 'bold',
+                            }}
+                            aria-label={`Open ${epic.id} in Jira`}
+                          >
+                            {epic.id}
+                          </button> {epic.title}
                           <div className="dates" style={{ fontSize: '12px', color: '#666', marginTop: '5px' }}>
                             {epic.startDate && <span>Start: {formatDate(epic.startDate)}</span>}
                             {epic.dueDate && <span style={{ marginLeft: '15px' }}>Due: {formatDate(epic.dueDate)}</span>}

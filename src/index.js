@@ -128,7 +128,7 @@ resolver.define('getIssueDependencies', async ({ payload }) => {
   const { projectKeys } = payload;
   if (!projectKeys?.length) return [];
 
-  const jql = `project in (${projectKeys.join(',')}) AND issuetype in (Epic, Story) ORDER BY created DESC`;
+  const jql = `project in (${projectKeys.join(',')}) ORDER BY created DESC`;
   const data = await jiraGet('/rest/api/3/search/jql', {
     jql,
     maxResults: '100',
