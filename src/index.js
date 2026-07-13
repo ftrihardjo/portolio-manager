@@ -146,6 +146,10 @@ resolver.define('getIssueDependencies', async ({ payload }) => {
     priority: issue.fields.priority?.name ?? 'Medium',
     links: (issue.fields.issuelinks || []).map(l => ({
       type: l.type.name,
+      // Directional phrases (e.g. "blocks" / "is blocked by") — the generic
+      // type.name alone can't distinguish direction, which was causing the
+      // UI to always label links with the outward phrase even when this
+      // issue was actually on the inward ("is blocked by") side.
       outwardLabel: l.type.outward,
       inwardLabel: l.type.inward,
       inward: l.inwardIssue?.key ?? null,
