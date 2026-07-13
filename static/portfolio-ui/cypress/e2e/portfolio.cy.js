@@ -271,8 +271,8 @@ describe('Advanced Portfolio Manager E2E', () => {
       case 'getIssueDependencies':
         if (scenario === 'circularDependency') {
           return [
-            { id: 'PROJ1-1', title: 'Task A', project: 'PROJ1', type: 'task', statusCategory: 'indeterminate', statusName: 'In Progress', assignee: 'Alice', priority: 'High', links: [{ type: 'Blocks', inward: 'PROJ2-1', outward: null }] },
-            { id: 'PROJ2-1', title: 'Task B', project: 'PROJ2', type: 'task', statusCategory: 'indeterminate', statusName: 'To Do', assignee: 'Bob', priority: 'Medium', links: [{ type: 'Blocks', outward: 'PROJ1-1', inward: null }] },
+            { id: 'PROJ1-1', title: 'Task A', project: 'PROJ1', type: 'task', statusCategory: 'indeterminate', statusName: 'In Progress', assignee: 'Alice', priority: 'High', links: [{ type: 'Blocks', outwardLabel: 'blocks', outward: 'PROJ2-1', inward: null }] },
+            { id: 'PROJ2-1', title: 'Task B', project: 'PROJ2', type: 'task', statusCategory: 'indeterminate', statusName: 'To Do', assignee: 'Bob', priority: 'Medium', links: [{ type: 'Blocks', outwardLabel: 'blocks', outward: 'PROJ1-1', inward: null }] },
           ];
         }
         return getMockData(resolverName, payload);
@@ -393,7 +393,7 @@ describe('Advanced Portfolio Manager E2E', () => {
         onBeforeLoad(win) { win.__bridge = advancedForgeBridgeMock({}, 'circularDependency'); },
       });
       cy.contains('button', 'Dependencies').click();
-      cy.contains('Circular dependency detected').should('be.visible');
+      cy.contains('Circular dependency detected: PROJ1-1 → PROJ2-1 → PROJ1-1').should('be.visible');
       
       // 📸 Snapshot of circular dependency warning
       cy.screenshot('circular-dependency-warning');

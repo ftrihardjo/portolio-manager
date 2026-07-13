@@ -146,6 +146,8 @@ resolver.define('getIssueDependencies', async ({ payload }) => {
     priority: issue.fields.priority?.name ?? 'Medium',
     links: (issue.fields.issuelinks || []).map(l => ({
       type: l.type.name,
+      outwardLabel: l.type.outward,
+      inwardLabel: l.type.inward,
       inward: l.inwardIssue?.key ?? null,
       outward: l.outwardIssue?.key ?? null,
     })),

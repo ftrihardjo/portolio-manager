@@ -206,7 +206,7 @@ describe('App', () => {
       fireEvent.click(projectBtn);
       
       expect(router.open).toHaveBeenCalledWith(
-        `/issues/?jql=${encodeURIComponent('project = "PROJ1"')}`
+        `/jira/issues/?jql=${encodeURIComponent('project = "PROJ1"')}`
       );
     });
 
@@ -688,7 +688,7 @@ describe('App', () => {
       fireEvent.click(screen.getByTestId('stats-total-PROJ1'));
       
       expect(router.open).toHaveBeenCalledWith(
-        `/issues/?jql=${encodeURIComponent('project = "PROJ1"')}`
+        `/jira/issues/?jql=${encodeURIComponent('project = "PROJ1"')}`
       );
     });
 
@@ -839,13 +839,18 @@ describe('App', () => {
   // ──────────────────────────────────────────────────────────────────────
   describe('Circular Dependency Detection', () => {
     it('should display warning when circular dependency detected', async () => {
+      // A genuine cycle needs actual outward edges forming a loop. The old
+      // fixture here (PROJ1-1 inward=PROJ2-1 / PROJ2-1 outward=PROJ1-1) was
+      // actually just ONE relationship recorded reciprocally on both
+      // issues' records -- not a real cycle -- which is exactly the false
+      // positive this test used to (incorrectly) lock in.
       const circularDeps = [
-        { id: 'PROJ1-1', title: 'Task A', project: 'PROJ1', type: 'task', statusCategory: 'indeterminate', statusName: 'In Progress', links: [{ type: 'Blocks', inward: 'PROJ2-1' }] },
-        { id: 'PROJ2-1', title: 'Task B', project: 'PROJ2', type: 'task', statusCategory: 'indeterminate', statusName: 'To Do', links: [{ type: 'Blocks', outward: 'PROJ1-1' }] },
+        { id: 'PROJ1-1', title: 'Task A', project: 'PROJ1', type: 'task', statusCategory: 'indeterminate', statusName: 'In Progress', links: [{ type: 'Blocks', outwardLabel: 'blocks', outward: 'PROJ2-1' }] },
+        { id: 'PROJ2-1', title: 'Task B', project: 'PROJ1', type: 'task', statusCategory: 'indeterminate', statusName: 'To Do', links: [{ type: 'Blocks', outwardLabel: 'blocks', outward: 'PROJ1-1' }] },
       ];
       
       mockInvoke({
-        getProjects: [{ id: 1, key: 'PROJ1', name: 'Alpha' }, { id: 2, key: 'PROJ2', name: 'Beta' }],
+        getProjects: [{ id: 1, key: 'PROJ1', name: 'Alpha' }],
         getIssueDependencies: () => circularDeps,
       });
       
@@ -855,7 +860,7 @@ describe('App', () => {
       
       await waitFor(() => {
         expect(screen.getByTestId('dependency-warning')).toBeInTheDocument();
-        expect(screen.getByText('Circular dependency detected')).toBeInTheDocument();
+        expect(screen.getByText(/Circular dependency detected: PROJ1-1 → PROJ2-1 → PROJ1-1/)).toBeInTheDocument();
       });
     });
 

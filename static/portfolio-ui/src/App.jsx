@@ -23,7 +23,7 @@ function jqlForProjectStatus(projectKey, status) {
 // Opens the Jira issue navigator, pre-filtered by the given JQL, in a new tab.
 function openIssuesInJira(projectKey, status) {
   const jql = jqlForProjectStatus(projectKey, status);
-  router.open(`/issues/?jql=${encodeURIComponent(jql)}`);
+  router.open(`/jira/issues/?jql=${encodeURIComponent(jql)}`);
 }
 
 async function invokeWithRetry(cmd, payload = {}, retries = 3, delay = 150) {
@@ -253,8 +253,10 @@ export default function App() {
         // (or change to `return false` if you want to exclude them)
         if (!p.startDate && !p.dueDate) return true; 
         
-        const filterStart = new Date(dateFilter.start);
-        const filterEnd = new Date(dateFilter.end);
+        const rawStart = new Date(dateFilter.start);
+        const rawEnd = new Date(dateFilter.end);
+        const filterStart = rawStart <= rawEnd ? rawStart : rawEnd;
+        const filterEnd = rawStart <= rawEnd ? rawEnd : rawStart;
         const pStart = p.startDate ? new Date(p.startDate) : null;
         const pEnd = p.dueDate ? new Date(p.dueDate) : null;
         
@@ -312,34 +314,57 @@ export default function App() {
     }
   }, [filteredDependencies.length, activeTab, loading]);
 
-  const hasCircularDependency = useMemo(() => {
+  const circularDependencyPath = useMemo(() => {
+    // Build the graph using only `outward` links. Each real link between two
+    // fetched issues appears TWICE in the raw data — once as `outward` on
+    // the source issue, once as `inward` on the target issue (that's just
+    // Jira reciprocally recording the same relationship on both sides).
+    // Adding edges for both directions from every issue turns every single
+    // link into a fake 2-node cycle (A→B via outward, B→A via inward for
+    // the very same relationship). Using outward-only gives each real
+    // relationship exactly one directed edge.
     const adj = {};
     dependencies.forEach(issue => {
-      adj[issue.id] = [];
-      if (issue.links) {
-        issue.links.forEach(l => {
-          if (l.outward) adj[issue.id].push(l.outward);
-          if (l.inward) adj[issue.id].push(l.inward);
-        });
-      }
+      adj[issue.id] = adj[issue.id] || [];
+      (issue.links || []).forEach(l => {
+        if (l.outward) adj[issue.id].push(l.outward);
+      });
     });
+
     const visited = {};
     const recStack = {};
-    function isCyclic(node) {
-      if (!visited[node]) {
-        visited[node] = true;
-        recStack[node] = true;
-        for (let neighbor of (adj[node] || [])) {
-          if (!visited[neighbor] && isCyclic(neighbor)) return true;
-          if (recStack[neighbor]) return true;
+    const pathStack = [];
+
+    function dfs(node) {
+      visited[node] = true;
+      recStack[node] = true;
+      pathStack.push(node);
+
+      for (const neighbor of (adj[node] || [])) {
+        if (!visited[neighbor]) {
+          const cycle = dfs(neighbor);
+          if (cycle) return cycle;
+        } else if (recStack[neighbor]) {
+          const cycleStart = pathStack.indexOf(neighbor);
+          return [...pathStack.slice(cycleStart), neighbor];
         }
       }
+
+      pathStack.pop();
       recStack[node] = false;
-      return false;
+      return null;
     }
-    for (let node in adj) if (isCyclic(node)) return true;
-    return false;
+
+    for (const node in adj) {
+      if (!visited[node]) {
+        const cycle = dfs(node);
+        if (cycle) return cycle;
+      }
+    }
+    return null;
   }, [dependencies]);
+
+  const hasCircularDependency = circularDependencyPath !== null;
 
   const processedEpics = useMemo(() => {
     return epics.map((epic, i, arr) => {
@@ -410,79 +435,81 @@ export default function App() {
 
       {hasCircularDependency && (
         <div className="error-banner circular-warning" data-testid="dependency-warning" style={{ backgroundColor: '#fff3cd', color: '#856404' }}>
-          Circular dependency detected
+          Circular dependency detected: {circularDependencyPath.join(' → ')}
         </div>
       )}
 
-      <div className="global-filters" style={{ display: 'flex', gap: '15px', padding: '10px 20px' }}>
-        <input
-          type="text"
-          data-testid="search-projects"
-          placeholder="Search projects..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-        />
-        <select
-          data-testid="filter-lead"
-          value={selectedLead}
-          onChange={(e) => setSelectedLead(e.target.value)}
-        >
-          <option value="">All Leads</option>
-          {uniqueLeads.map(lead => (
-            <option key={lead} value={lead}>{lead}</option>
-          ))}
-        </select>
-        <button onClick={() => setLayoutDir(prev => prev === 'ltr' ? 'rtl' : 'ltr')} style={{ fontSize: '11px' }}>
-          Toggle Language Direction
-        </button>
-      </div>
+      {activeTab === 'projects' && (<div className="global-filters" style={{ display: 'flex', gap: '15px', padding: '10px 20px' }}>
+            <input
+              type="text"
+              data-testid="search-projects"
+              placeholder="Search projects..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            <select
+              data-testid="filter-lead"
+              value={selectedLead}
+              onChange={(e) => setSelectedLead(e.target.value)}
+            >
+              <option value="">All Leads</option>
+              {uniqueLeads.map(lead => (
+                <option key={lead} value={lead}>{lead}</option>
+              ))}
+            </select>
+            <button onClick={() => setLayoutDir(prev => prev === 'ltr' ? 'rtl' : 'ltr')} style={{ fontSize: '11px' }}>
+              Toggle Language Direction
+            </button>
+          </div>)}
 
-      <div className="advanced-filters" style={{ display: 'flex', gap: '10px', padding: '0 20px 10px', flexWrap: 'wrap' }}>
-        <input
-          type="text"
-          placeholder="Search by lead..."
-          value={leadSearch}
-          onChange={(e) => setLeadSearch(e.target.value)}
-          style={{ minWidth: '150px' }}
-          aria-label="Search projects by lead name"
-        />
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          aria-label="Filter by project status"
-        >
-          <option value="">All Statuses</option>
-          <option value="done">Completed</option>
-          <option value="inProgress">In Progress</option>
-          <option value="blocked">Has Blocked Items</option>
-        </select>
-        <input
-          type="date"
-          value={dateFilter.start}
-          onChange={(e) => setDateFilter(prev => ({ ...prev, start: e.target.value }))}
-          placeholder="Start date"
-          aria-label="Filter by start date from"
-        />
-        <span style={{ alignSelf: 'center' }}>to</span>
-        <input
-          type="date"
-          value={dateFilter.end}
-          onChange={(e) => setDateFilter(prev => ({ ...prev, end: e.target.value }))}
-          placeholder="End date"
-          aria-label="Filter by start date to"
-        />
-        <button
-          onClick={() => {
-            setLeadSearch('');
-            setStatusFilter('');
-            setDateFilter({ start: '', end: '' });
-            setSrAnnouncement('Filters cleared');
-          }}
-          style={{ fontSize: '12px' }}
-        >
-          Clear Filters
-        </button>
-      </div>
+          {activeTab === 'projects' && (<div className="advanced-filters" style={{ display: 'flex', gap: '10px', padding: '0 20px 10px', flexWrap: 'wrap' }}>
+                 <input
+                   type="text"
+                   placeholder="Search by lead..."
+                   value={leadSearch}
+                   onChange={(e) => setLeadSearch(e.target.value)}
+                   style={{ minWidth: '150px' }}
+                   aria-label="Search projects by lead name"
+                 />
+                 <select
+                   value={statusFilter}
+                   onChange={(e) => setStatusFilter(e.target.value)}
+                   aria-label="Filter by project status"
+                 >
+                   <option value="">All Statuses</option>
+                   <option value="done">Completed</option>
+                   <option value="inProgress">In Progress</option>
+                   <option value="blocked">Has Blocked Items</option>
+                 </select>
+                 <input
+                   type="date"
+                   value={dateFilter.start}
+                   max={dateFilter.end || undefined}
+                   onChange={(e) => setDateFilter(prev => ({ ...prev, start: e.target.value }))}
+                   placeholder="Start date"
+                   aria-label="Filter by start date from"
+                 />
+                 <span style={{ alignSelf: 'center' }}>to</span>
+                 <input
+                   type="date"
+                   min={dateFilter.start || undefined}
+                   value={dateFilter.end}
+                   onChange={(e) => setDateFilter(prev => ({ ...prev, end: e.target.value }))}
+                   placeholder="End date"
+                   aria-label="Filter by start date to"
+                 />
+                 <button
+                   onClick={() => {
+                     setLeadSearch('');
+                     setStatusFilter('');
+                     setDateFilter({ start: '', end: '' });
+                     setSrAnnouncement('Filters cleared');
+                   }}
+                   style={{ fontSize: '12px' }}
+                 >
+                   Clear Filters
+                 </button>
+    </div>)}
 
       <main className="app-content">
         {activeTab === 'projects' && (
@@ -699,9 +726,19 @@ export default function App() {
                         <ul className="links-list" style={{ marginTop: '8px', paddingLeft: '20px' }}>
                           {issue.links.map((link, idx) => (
                             <li key={idx}>
-                              {link.type}: {link.outward || link.inward || '—'}
-                              <span className="dependency-arrow" style={{ padding: '0 5px', color: '#0052cc' }}>→</span>
-                              {link.outward && link.inward && ` ↔ ${link.inward}`}
+                              {link.outward && (
+                                <span>
+                                  {link.outwardLabel || link.type}: {link.outward}
+                                  <span className="dependency-arrow" style={{ padding: '0 5px', color: '#0052cc' }}>→</span>
+                                </span>
+                              )}
+                              {link.inward && (
+                                <span>
+                                  {link.inwardLabel || link.type}: {link.inward}
+                                  <span className="dependency-arrow" style={{ padding: '0 5px', color: '#0052cc' }}>←</span>
+                                </span>
+                              )}
+                              {!link.outward && !link.inward && '—'}
                             </li>
                           ))}
                         </ul>
