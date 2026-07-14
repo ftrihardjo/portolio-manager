@@ -14,6 +14,18 @@ jest.mock('@forge/bridge', () => ({
   },
 }));
 
+// jsdom has no canvas support, so vis-network can't actually render in
+// tests. Mock it with a minimal stand-in — the graph's own rendering isn't
+// under test here (it's a visual diagram), but the surrounding component
+// still needs to mount without throwing.
+jest.mock('vis-network/standalone', () => ({
+  Network: jest.fn().mockImplementation(() => ({
+    on: jest.fn(),
+    destroy: jest.fn(),
+  })),
+  DataSet: jest.fn().mockImplementation((items) => items || []),
+}));
+
 // Suppress expected React warnings in tests
 const originalError = console.error;
 console.error = (...args) => {
@@ -288,6 +300,38 @@ describe('App', () => {
       });
     });
 
+    it('renders a dependency graph canvas alongside the accessible card list', async () => {
+      render(<App />);
+      await waitFor(() => screen.getByText('Alpha'));
+
+      fireEvent.click(screen.getByRole('tab', { name: /Dependencies/i }));
+      await waitFor(() => screen.getByText(/Story A/));
+
+      // The graph canvas mounts (vis-network itself is mocked in jsdom,
+      // but the surrounding component and its accessible fallback text
+      // should still be present).
+      expect(screen.getByTestId('dependency-graph-canvas')).toBeInTheDocument();
+      expect(screen.getByTestId('dependency-graph-canvas')).toHaveAttribute('role', 'img');
+      // The card list underneath should still be there too — the graph is
+      // additive, not a replacement for the accessible view.
+      expect(screen.getByText(/Story A/)).toBeInTheDocument();
+    });
+
+    it('does not render the graph canvas when there are no dependencies to show', async () => {
+      mockInvoke({
+        getProjects: [{ id: 1, key: 'PROJ1', name: 'Alpha' }],
+        getProjectStats: () => ({ total: 0, done: 0, blocked: 0, inProgress: 0, riskScore: 0 }),
+        getIssueDependencies: [],
+      });
+
+      render(<App />);
+      await waitFor(() => screen.getByText('Alpha'));
+      fireEvent.click(screen.getByRole('tab', { name: /Dependencies/i }));
+
+      await waitFor(() => screen.getByText('No issues found.'));
+      expect(screen.queryByTestId('dependency-graph-canvas')).not.toBeInTheDocument();
+    });
+
     it('filters by project checkboxes', async () => {
       render(<App />);
       await waitFor(() => screen.getByText('Alpha'));
@@ -440,6 +484,97 @@ describe('App', () => {
       const epic1 = screen.getByText('Epic 1').closest('.timeline-item');
       expect(epic1).not.toHaveClass('overlapping');
       expect(epic1).toHaveStyle({ borderLeft: '4px solid #0052cc' });
+    });
+  });
+
+  describe('Summary tab', () => {
+    const projectsMock = [
+      { id: 1, key: 'PROJ1', name: 'Alpha', lead: 'John', avatarUrl: null },
+      { id: 2, key: 'PROJ2', name: 'Beta', lead: 'Jane', avatarUrl: null },
+    ];
+    const statsMock = {
+      PROJ1: { total: 10, done: 5, blocked: 2, inProgress: 3, overdueEpics: 1, riskScore: 60 },
+      PROJ2: { total: 5, done: 5, blocked: 0, inProgress: 0, overdueEpics: 0, riskScore: 0 },
+    };
+
+    beforeEach(() => {
+      mockInvoke({
+        getProjects: projectsMock,
+        getProjectStats: (payload) => statsMock[payload.projectKey],
+        getIssueDependencies: () => [],
+        getRoadmapEpics: () => [],
+      });
+    });
+
+    it('shows aggregate stats and a narrative summary when the tab is clicked', async () => {
+      render(<App />);
+      await waitFor(() => screen.getByText('Alpha'));
+
+      fireEvent.click(screen.getByRole('tab', { name: /Summary/i }));
+
+      await waitFor(() => {
+        const grid = screen.getByTestId('summary-stat-grid');
+        expect(grid).toHaveTextContent('2'); // 2 projects
+        expect(grid).toHaveTextContent('15'); // 15 total issues (10 + 5)
+        expect(grid).toHaveTextContent('67%'); // 10 done / 15 total
+      });
+
+      const narrative = screen.getByTestId('summary-narrative');
+      expect(narrative).toHaveTextContent(/Across 2 projects/i);
+      expect(narrative).toHaveTextContent(/2 issues are currently blocked/i);
+    });
+
+    it('lists the highest-risk project with a link through to its issues', async () => {
+      render(<App />);
+      await waitFor(() => screen.getByText('Alpha'));
+      fireEvent.click(screen.getByRole('tab', { name: /Summary/i }));
+
+      await waitFor(() => screen.getByText(/Highest-Risk Projects/i));
+      expect(screen.getByRole('button', { name: /Alpha \(PROJ1\)/ })).toBeInTheDocument();
+      expect(screen.getByText(/risk 60\/100/)).toBeInTheDocument();
+      // Beta has a risk score of 0, so it shouldn't appear in the top-risks list.
+      expect(screen.queryByRole('button', { name: /Beta \(PROJ2\)/ })).not.toBeInTheDocument();
+    });
+
+    it('surfaces circular dependency and overdue-epic warnings in the narrative', async () => {
+      const circularDeps = [
+        { id: 'PROJ1-1', title: 'Task A', project: 'PROJ1', type: 'task', statusCategory: 'indeterminate', statusName: 'In Progress', links: [{ type: 'Blocks', outwardLabel: 'blocks', outward: 'PROJ1-2' }] },
+        { id: 'PROJ1-2', title: 'Task B', project: 'PROJ1', type: 'task', statusCategory: 'indeterminate', statusName: 'To Do', links: [{ type: 'Blocks', outwardLabel: 'blocks', outward: 'PROJ1-1' }] },
+      ];
+      mockInvoke({
+        getProjects: projectsMock,
+        getProjectStats: (payload) => statsMock[payload.projectKey],
+        getIssueDependencies: () => circularDeps,
+        getRoadmapEpics: () => [],
+      });
+
+      render(<App />);
+      await waitFor(() => screen.getByText('Alpha'));
+      fireEvent.click(screen.getByRole('tab', { name: /Summary/i }));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('summary-narrative')).toHaveTextContent(
+          /A circular dependency was detected: PROJ1-1 → PROJ1-2 → PROJ1-1/
+        );
+        expect(screen.getByTestId('summary-narrative')).toHaveTextContent(/1 epic is past due/i);
+      });
+    });
+
+    it('shows a message when the portfolio has no projects', async () => {
+      mockInvoke({
+        getProjects: [],
+        getIssueDependencies: () => [],
+        getRoadmapEpics: () => [],
+      });
+
+      render(<App />);
+      fireEvent.click(screen.getByRole('tab', { name: /Summary/i }));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('summary-narrative')).toHaveTextContent(
+          /No projects were found in this portfolio/i
+        );
+      });
     });
   });
 

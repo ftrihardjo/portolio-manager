@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke, router } from '@forge/bridge';
+import { Network, DataSet } from 'vis-network/standalone';
+import 'vis-network/styles/vis-network.css';
 import './App.css';
 
-const TABS = ['projects', 'dependencies', 'roadmap'];
+const TABS = ['projects', 'dependencies', 'roadmap', 'summary'];
 
 // Builds the JQL used to open the Jira issue navigator for a given
 // project + status filter combo (mirrors the JQL used by getProjectStats).
@@ -43,6 +45,128 @@ async function invokeWithRetry(cmd, payload = {}, retries = 3, delay = 150) {
     }
     throw e;
   }
+}
+
+// Visual node-edge diagram of dependency relationships, built with
+// vis-network (already a project dependency, previously unused). A flat
+// list of cards is functionally correct but doesn't answer the actual
+// question a "Dependencies" view exists to answer at a glance: which
+// issues are blocking chains, and where. A diagram does that directly.
+//
+// This is purely additive — the existing card list stays right below it
+// as the accessible, screen-reader-friendly detail view; the graph is a
+// visual overview layered on top, not a replacement.
+function DependencyGraph({ issues, circularPath, onNodeClick }) {
+  const containerRef = useRef(null);
+  const networkRef = useRef(null);
+
+  useEffect(() => {
+    if (!containerRef.current || issues.length === 0) return undefined;
+
+    const cycleIds = new Set(circularPath || []);
+    const issueIds = new Set(issues.map(i => i.id));
+
+    const statusColor = (statusCategory) => {
+      if (statusCategory === 'done') return '#36B37E';
+      if (statusCategory === 'indeterminate') return '#0052CC';
+      return '#97A0AF'; // 'new' / anything else
+    };
+
+    const nodes = new DataSet(
+      issues.map(issue => {
+        const inCycle = cycleIds.has(issue.id);
+        const color = statusColor(issue.statusCategory);
+        const shortTitle = issue.title && issue.title.length > 24
+          ? `${issue.title.slice(0, 24)}…`
+          : issue.title;
+        return {
+          id: issue.id,
+          label: `${issue.id}\n${shortTitle || ''}`,
+          shape: 'box',
+          color: {
+            background: color,
+            border: inCycle ? '#DE350B' : color,
+            highlight: { background: color, border: '#091E42' },
+          },
+          borderWidth: inCycle ? 3 : 1,
+          font: { color: '#fff', size: 12, multi: false, align: 'center' },
+          margin: 8,
+        };
+      })
+    );
+
+    // Only outward links, and only between issues actually in this view —
+    // same outward-only convention used by the cycle detector, so the
+    // diagram never double-draws a single relationship as two edges.
+    const edgeList = [];
+    issues.forEach(issue => {
+      (issue.links || []).forEach(link => {
+        if (link.outward && issueIds.has(link.outward)) {
+          const inCycleEdge = cycleIds.has(issue.id) && cycleIds.has(link.outward);
+          edgeList.push({
+            from: issue.id,
+            to: link.outward,
+            label: link.outwardLabel || link.type,
+            arrows: 'to',
+            color: { color: inCycleEdge ? '#DE350B' : '#97A0AF', highlight: '#091E42' },
+            width: inCycleEdge ? 2.5 : 1,
+            font: { size: 10, align: 'top', color: '#666' },
+            smooth: { type: 'cubicBezier', roundness: 0.4 },
+          });
+        }
+      });
+    });
+
+    const data = { nodes, edges: new DataSet(edgeList) };
+    const options = {
+      layout: {
+        hierarchical: {
+          enabled: true,
+          direction: 'LR',
+          sortMethod: 'directed',
+          levelSeparation: 180,
+          nodeSpacing: 110,
+        },
+      },
+      physics: false,
+      interaction: { hover: true, tooltipDelay: 200, dragNodes: true, zoomView: true },
+      nodes: { shape: 'box', margin: 8 },
+    };
+
+    networkRef.current = new Network(containerRef.current, data, options);
+    networkRef.current.on('click', (params) => {
+      if (params.nodes.length > 0) {
+        onNodeClick(params.nodes[0]);
+      }
+    });
+
+    return () => {
+      networkRef.current?.destroy();
+      networkRef.current = null;
+    };
+  }, [issues, circularPath, onNodeClick]);
+
+  if (issues.length === 0) return null;
+
+  return (
+    <div style={{ padding: '0 20px' }}>
+      <div
+        ref={containerRef}
+        data-testid="dependency-graph-canvas"
+        style={{ height: '360px', border: '1px solid #ddd', borderRadius: '4px', marginBottom: '10px', background: '#fafbfc' }}
+        role="img"
+        aria-label="Dependency graph diagram showing blocking relationships between issues. See the list below for an accessible, text-based view of the same relationships."
+      />
+      <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: '#666', marginBottom: '20px', flexWrap: 'wrap', alignItems: 'center' }}>
+        <span><span style={{ display: 'inline-block', width: 10, height: 10, background: '#36B37E', marginRight: 4, borderRadius: 2 }} />Done</span>
+        <span><span style={{ display: 'inline-block', width: 10, height: 10, background: '#0052CC', marginRight: 4, borderRadius: 2 }} />In Progress</span>
+        <span><span style={{ display: 'inline-block', width: 10, height: 10, background: '#97A0AF', marginRight: 4, borderRadius: 2 }} />To Do</span>
+        <span><span style={{ display: 'inline-block', width: 10, height: 10, border: '2px solid #DE350B', marginRight: 4, borderRadius: 2 }} />In a circular dependency</span>
+        <span>Arrows follow each link's direction (label shows the relationship)</span>
+        <span>Click a node to open that issue</span>
+      </div>
+    </div>
+  );
 }
 
 export default function App() {
@@ -126,6 +250,32 @@ export default function App() {
     }
   }
 
+  // The Summary tab synthesizes both dependency and roadmap data, so it
+  // fetches both in parallel rather than reusing loadDependencies/loadEpics
+  // sequentially (which would each toggle the shared `loading` flag
+  // independently and cause a flicker when one finishes before the other).
+  async function loadSummaryData() {
+    setLoading(true);
+    try {
+      const keys = selectedProjects.length > 0 ? selectedProjects : projects.map(p => p.key);
+      if (keys.length === 0) {
+        setDependencies([]);
+        setEpics([]);
+        return;
+      }
+      const [depsData, epicsData] = await Promise.all([
+        invokeWithRetry('getIssueDependencies', { projectKeys: keys }),
+        invokeWithRetry('getRoadmapEpics', { projectKeys: keys }),
+      ]);
+      setDependencies(depsData || []);
+      setEpics(epicsData || []);
+    } catch (e) {
+      setError('Summary load error: ' + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
     loadProjects();
   }, []);
@@ -164,6 +314,8 @@ export default function App() {
       loadDependencies();
     } else if (activeTab === 'roadmap') {
       loadEpics();
+    } else if (activeTab === 'summary') {
+      loadSummaryData();
     }
     setSrAnnouncement(`Switched to ${activeTab} tab`);
   }, [activeTab, selectedProjects]);
@@ -179,6 +331,7 @@ export default function App() {
     loadProjects();
     if (activeTab === 'dependencies') loadDependencies();
     if (activeTab === 'roadmap') loadEpics();
+    if (activeTab === 'summary') loadSummaryData();
   }
 
   const handleTabKeyDown = (e, index) => {
@@ -400,6 +553,81 @@ export default function App() {
        return { ...epic, isOverlapping };
     });
   }, [epics]);
+
+  // ── Portfolio Summary ────────────────────────────────────────────────
+  // Deterministic, template-based text generation from data already in
+  // state — no external AI API call (and therefore no per-request cost).
+  // Every clause is conditional on the underlying data actually being
+  // present, so the summary reads naturally whether the portfolio is
+  // healthy or has multiple issues flagged.
+  const portfolioSummary = useMemo(() => {
+    const totalProjects = projectStats.length;
+    const totalIssues = projectStats.reduce((sum, p) => sum + (p.total || 0), 0);
+    const totalDone = projectStats.reduce((sum, p) => sum + (p.done || 0), 0);
+    const totalBlocked = projectStats.reduce((sum, p) => sum + (p.blocked || 0), 0);
+    const totalOverdueEpics = projectStats.reduce((sum, p) => sum + (p.overdueEpics || 0), 0);
+    const overallCompletionPct = totalIssues > 0 ? Math.round((100 * totalDone) / totalIssues) : 0;
+    const overlappingEpicsCount = processedEpics.filter(e => e.isOverlapping).length;
+
+    const topRisks = projectStats
+      .filter(p => typeof p.riskScore === 'number' && p.riskScore > 0)
+      .sort((a, b) => b.riskScore - a.riskScore)
+      .slice(0, 3);
+
+    const paragraphs = [];
+
+    paragraphs.push(
+      totalProjects === 0
+        ? 'No projects were found in this portfolio.'
+        : `Across ${totalProjects} project${totalProjects === 1 ? '' : 's'}, the portfolio has ${totalIssues} tracked issue${totalIssues === 1 ? '' : 's'}, ${overallCompletionPct}% complete (${totalDone} done). ${totalBlocked} issue${totalBlocked === 1 ? ' is' : 's are'} currently blocked.`
+    );
+
+    if (topRisks.length > 0) {
+      const [top, ...rest] = topRisks;
+      const topClauses = [];
+      if (top.overdueEpics > 0) topClauses.push(`${top.overdueEpics} overdue epic${top.overdueEpics === 1 ? '' : 's'}`);
+      if (top.blocked > 0) topClauses.push(`${top.blocked} blocked issue${top.blocked === 1 ? '' : 's'}`);
+      const topClauseText = topClauses.length > 0 ? ` (driven by ${topClauses.join(' and ')})` : '';
+      const restText = rest.length > 0
+        ? ` Other elevated-risk projects: ${rest.map(p => `${p.name} (${p.riskScore})`).join(', ')}.`
+        : '';
+      paragraphs.push(
+        `The highest-risk project is ${top.name} (${top.key}) with a risk score of ${top.riskScore}/100${topClauseText}.${restText}`
+      );
+    } else if (totalProjects > 0) {
+      paragraphs.push('No projects are currently flagged as high risk.');
+    }
+
+    if (hasCircularDependency) {
+      paragraphs.push(
+        `A circular dependency was detected: ${circularDependencyPath.join(' → ')}. None of the issues in this cycle can be completed first — it should be resolved by removing or re-scoping one of the links.`
+      );
+    }
+
+    if (totalOverdueEpics > 0) {
+      paragraphs.push(
+        `${totalOverdueEpics} epic${totalOverdueEpics === 1 ? ' is' : 's are'} past due and not yet complete across the portfolio.`
+      );
+    }
+
+    if (overlappingEpicsCount > 0) {
+      paragraphs.push(
+        `${overlappingEpicsCount} epic${overlappingEpicsCount === 1 ? '' : 's'} have overlapping timelines, which may indicate scheduling conflicts or resource contention.`
+      );
+    }
+
+    return {
+      paragraphs,
+      totalProjects,
+      totalIssues,
+      totalDone,
+      totalBlocked,
+      totalOverdueEpics,
+      overallCompletionPct,
+      overlappingEpicsCount,
+      topRisks,
+    };
+  }, [projectStats, processedEpics, hasCircularDependency, circularDependencyPath]);
 
   function formatDate(dateStr) {
     if (!dateStr) return '';
@@ -770,7 +998,13 @@ export default function App() {
             {loading ? (
               <p style={{ padding: '0 20px' }}>Loading dependencies…</p>
             ) : (
-              <div className="dependency-graph" style={{ padding: '0 20px' }}>
+              <>
+                <DependencyGraph
+                  issues={filteredDependencies}
+                  circularPath={circularDependencyPath}
+                  onNodeClick={openIssueInJira}
+                />
+                <div className="dependency-graph" style={{ padding: '0 20px' }}>
                 {filteredDependencies.length === 0 ? (
                   <p>No issues found.</p>
                 ) : (
@@ -841,7 +1075,8 @@ export default function App() {
                     </div>
                   ))
                 )}
-              </div>
+                </div>
+              </>
             )}
           </section>
         )}
@@ -928,6 +1163,71 @@ export default function App() {
                     ))
                   )}
                 </div>
+              </div>
+            )}
+          </section>
+        )}
+
+        {activeTab === 'summary' && (
+          <section className="summary-section" id="panel-summary" role="tabpanel">
+            <h2>Portfolio Summary</h2>
+
+            {loading ? (
+              <p style={{ padding: '0 20px' }}>Loading summary…</p>
+            ) : (
+              <div style={{ padding: '0 20px', maxWidth: '760px' }}>
+                {/* Key numbers at a glance */}
+                <div
+                  data-testid="summary-stat-grid"
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
+                    gap: '12px',
+                    marginBottom: '24px',
+                  }}
+                >
+                  {[
+                    { label: 'Projects', value: portfolioSummary.totalProjects },
+                    { label: 'Total Issues', value: portfolioSummary.totalIssues },
+                    { label: 'Complete', value: `${portfolioSummary.overallCompletionPct}%` },
+                    { label: 'Blocked', value: portfolioSummary.totalBlocked },
+                    { label: 'Overdue Epics', value: portfolioSummary.totalOverdueEpics },
+                  ].map(stat => (
+                    <div key={stat.label} style={{ border: '1px solid #ddd', borderRadius: '4px', padding: '10px', textAlign: 'center' }}>
+                      <div style={{ fontSize: '22px', fontWeight: 'bold', color: '#0052cc' }}>{stat.value}</div>
+                      <div style={{ fontSize: '12px', color: '#666' }}>{stat.label}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Narrative summary — deterministic, template-generated from
+                    the same data already on screen elsewhere in the app.
+                    No external AI call, so no per-request cost. */}
+                <div data-testid="summary-narrative">
+                  {portfolioSummary.paragraphs.map((para, idx) => (
+                    <p key={idx} style={{ lineHeight: 1.6, marginBottom: '12px' }}>{para}</p>
+                  ))}
+                </div>
+
+                {/* Top-risk projects, each clickable through to its issues */}
+                {portfolioSummary.topRisks.length > 0 && (
+                  <div style={{ marginTop: '20px' }}>
+                    <h3 style={{ fontSize: '14px', marginBottom: '8px' }}>Highest-Risk Projects</h3>
+                    <ul style={{ paddingLeft: '20px' }}>
+                      {portfolioSummary.topRisks.map(p => (
+                        <li key={p.key} style={{ marginBottom: '4px' }}>
+                          <button
+                            onClick={() => openIssuesInJira(p.key, 'all')}
+                            style={{ background: 'none', border: 'none', color: '#0052cc', cursor: 'pointer', textDecoration: 'underline', padding: 0, font: 'inherit' }}
+                          >
+                            {p.name} ({p.key})
+                          </button>
+                          {' — risk '}{p.riskScore}/100
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
             )}
           </section>
