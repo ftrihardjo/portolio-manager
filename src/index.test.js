@@ -122,16 +122,46 @@ describe('getProjects', () => {
 describe('getProjectStats', () => {
   const payload = { projectKey: 'TEST' };
 
-  it('returns stats from five approximate-count calls plus epic date range, and computes a risk score', async () => {
-    // Order matches the Promise.all in getProjectStats: all, done, blocked,
-    // inProgress, overdueEpics (approximate-count POSTs), then earliestEpic,
-    // latestEpic (GETs).
+  it('returns stats from four approximate-count calls, a link-based blocked count, and epic date range', async () => {
+    // Order matches the Promise.all in getProjectStats: all, done,
+    // inProgress, overdueEpics (approximate-count POSTs), then blockedData,
+    // earliestEpic, latestEpic (GETs).
     [
-      { count: 10 },
-      { count: 5 },
-      { count: 2 },
-      { count: 3 },
-      { count: 1 },
+      { count: 10 }, // all
+      { count: 5 },  // done
+      { count: 3 },  // inProgress
+      { count: 1 },  // overdueEpics
+      {
+        // blockedData: 3 issues, only ISSUE-1 has an unresolved "Blocks" link
+        issues: [
+          {
+            fields: {
+              status: { statusCategory: { key: 'new' } },
+              issuelinks: [
+                { type: { name: 'Blocks' }, inwardIssue: { fields: { status: { statusCategory: { key: 'new' } } } } },
+              ],
+            },
+          },
+          {
+            // Has a link, but the blocker is already Done — shouldn't count.
+            fields: {
+              status: { statusCategory: { key: 'new' } },
+              issuelinks: [
+                { type: { name: 'Blocks' }, inwardIssue: { fields: { status: { statusCategory: { key: 'done' } } } } },
+              ],
+            },
+          },
+          {
+            // Has a link, but it's "relates to" not "Blocks" — shouldn't count.
+            fields: {
+              status: { statusCategory: { key: 'new' } },
+              issuelinks: [
+                { type: { name: 'Relates' }, inwardIssue: { fields: { status: { statusCategory: { key: 'new' } } } } },
+              ],
+            },
+          },
+        ],
+      },
       { issues: [{ fields: { customfield_10015: '2024-01-01' } }] },
       { issues: [{ fields: { duedate: '2024-12-31' } }] },
     ].forEach(mockJiraResponse);
@@ -141,41 +171,43 @@ describe('getProjectStats', () => {
     expect(requestJiraMock).toHaveBeenCalledTimes(7);
     const calls = requestJiraMock.mock.calls;
 
-    // The five count calls should hit approximate-count via POST with the JQL in the body.
-    for (const [url, options] of calls.slice(0, 5)) {
+    // The four count calls should hit approximate-count via POST with the JQL in the body.
+    for (const [url, options] of calls.slice(0, 4)) {
       expect(url).toBe('/rest/api/3/search/approximate-count');
       expect(options.method).toBe('POST');
     }
-    const bodies = calls.slice(0, 5).map(([, options]) => JSON.parse(options.body).jql);
+    const bodies = calls.slice(0, 4).map(([, options]) => JSON.parse(options.body).jql);
     expect(bodies[0]).toBe('project = "TEST"');
     expect(bodies[1]).toContain('statusCategory = Done');
-    expect(bodies[2]).toContain('status = "Blocked"');
-    expect(bodies[3]).toContain('statusCategory = "In Progress"');
-    expect(bodies[4]).toContain('issuetype = Epic AND duedate < now() AND statusCategory != Done');
+    expect(bodies[2]).toContain('statusCategory = "In Progress"');
+    expect(bodies[3]).toContain('issuetype = Epic AND duedate < now() AND statusCategory != Done');
 
-    // The date-range calls should hit the new search/jql endpoint.
+    // The blocked-data and date-range calls should hit the new search/jql endpoint.
+    expect(calls[4][0]).toContain('/rest/api/3/search/jql');
+    expect(calls[4][0]).toContain('maxResults=100');
     expect(calls[5][0]).toContain('/rest/api/3/search/jql');
     expect(calls[5][0]).toContain('cf%5B10015%5D');
     expect(calls[6][0]).toContain('/rest/api/3/search/jql');
     expect(calls[6][0]).toContain('duedate');
 
     // riskScore = round(100 * (0.5 * blockedRatio + 0.5 * overdueComponent))
-    //           = round(100 * (0.5 * (2/10) + 0.5 * min(1,3)/3))
-    //           = round(100 * (0.10 + 0.1667)) = round(26.67) = 27
+    //           = round(100 * (0.5 * (1/10) + 0.5 * min(1,3)/3))
+    //           = round(100 * (0.05 + 0.1667)) = round(21.67) = 22
     expect(result).toEqual({
       total: 10,
       done: 5,
-      blocked: 2,
+      blocked: 1,
       inProgress: 3,
       overdueEpics: 1,
-      riskScore: 27,
+      riskScore: 22,
       startDate: '2024-01-01',
       dueDate: '2024-12-31',
     });
   });
 
   it('defaults missing counts and dates to 0/null, with a zero risk score', async () => {
-    for (let i = 0; i < 5; i++) mockJiraResponse({});
+    for (let i = 0; i < 4; i++) mockJiraResponse({});
+    mockJiraResponse({ issues: [] });
     mockJiraResponse({ issues: [] });
     mockJiraResponse({ issues: [] });
     const result = await getResolver('getProjectStats')({ payload });
@@ -195,9 +227,9 @@ describe('getProjectStats', () => {
     [
       { count: 20 },  // total
       { count: 0 },   // done
-      { count: 0 },   // blocked
       { count: 0 },   // inProgress
       { count: 10 },  // overdueEpics (way past the cap of 3)
+      { issues: [] }, // blockedData
       { issues: [] },
       { issues: [] },
     ].forEach(mockJiraResponse);
@@ -206,6 +238,28 @@ describe('getProjectStats', () => {
 
     // blockedRatio = 0, overdueComponent = min(10,3)/3 = 1 -> riskScore = round(100*0.5) = 50
     expect(result.riskScore).toBe(50);
+  });
+
+  it('does not count issues whose only links are non-"Blocks" types (e.g. Relates, Duplicates)', async () => {
+    [
+      { count: 5 }, { count: 0 }, { count: 0 }, { count: 0 },
+      {
+        issues: [
+          {
+            fields: {
+              status: { statusCategory: { key: 'new' } },
+              issuelinks: [
+                { type: { name: 'Duplicate' }, inwardIssue: { fields: { status: { statusCategory: { key: 'new' } } } } },
+              ],
+            },
+          },
+        ],
+      },
+      { issues: [] }, { issues: [] },
+    ].forEach(mockJiraResponse);
+
+    const result = await getResolver('getProjectStats')({ payload });
+    expect(result.blocked).toBe(0);
   });
 });
 

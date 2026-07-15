@@ -26,6 +26,21 @@ jest.mock('vis-network/standalone', () => ({
   DataSet: jest.fn().mockImplementation((items) => items || []),
 }));
 
+// jsdom lacks the browser download APIs jsPDF's save() relies on
+// (URL.createObjectURL etc). Mock it so components using it can be tested
+// without actually exercising the real PDF-generation internals, which
+// isn't this app's code to test in the first place.
+jest.mock('jspdf', () => ({
+  jsPDF: jest.fn().mockImplementation(() => ({
+    setFontSize: jest.fn(),
+    setTextColor: jest.fn(),
+    text: jest.fn(),
+    splitTextToSize: jest.fn((str) => [str]),
+    addPage: jest.fn(),
+    save: jest.fn(),
+  })),
+}));
+
 // Suppress expected React warnings in tests
 const originalError = console.error;
 console.error = (...args) => {
@@ -748,6 +763,27 @@ describe('App', () => {
           /No projects were found in this portfolio/i
         );
       });
+      // Nothing to export with zero projects.
+      expect(screen.getByTestId('export-summary-pdf')).toBeDisabled();
+    });
+
+    it('generates and saves a PDF when Export as PDF is clicked', async () => {
+      const { jsPDF } = require('jspdf');
+
+      render(<App />);
+      await waitFor(() => screen.getByText('Alpha'));
+      fireEvent.click(screen.getByRole('tab', { name: /Summary/i }));
+
+      await waitFor(() => screen.getByTestId('summary-narrative'));
+      const exportBtn = screen.getByTestId('export-summary-pdf');
+      expect(exportBtn).not.toBeDisabled();
+
+      fireEvent.click(exportBtn);
+
+      expect(jsPDF).toHaveBeenCalled();
+      const docInstance = jsPDF.mock.results[jsPDF.mock.results.length - 1].value;
+      expect(docInstance.text).toHaveBeenCalledWith('Portfolio Summary', expect.any(Number), expect.any(Number));
+      expect(docInstance.save).toHaveBeenCalledWith(expect.stringMatching(/^portfolio-summary-\d{4}-\d{2}-\d{2}\.pdf$/));
     });
   });
 

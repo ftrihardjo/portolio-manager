@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke, router } from '@forge/bridge';
 import { Network, DataSet } from 'vis-network/standalone';
+import { jsPDF } from 'jspdf';
 import 'vis-network/styles/vis-network.css';
 import './App.css';
 
@@ -45,6 +46,77 @@ async function invokeWithRetry(cmd, payload = {}, retries = 3, delay = 150) {
     }
     throw e;
   }
+}
+
+// Builds a one-page (or more, if content overflows) executive PDF from the
+// same deterministic summary data already shown in the Summary tab. Pure
+// client-side generation via jsPDF — no server round-trip, no AI API cost.
+function exportSummaryAsPDF(summary) {
+  const doc = new jsPDF();
+  const marginX = 15;
+  const pageBottom = 280;
+  let y = 20;
+
+  const ensureRoom = (lineHeight) => {
+    if (y + lineHeight > pageBottom) {
+      doc.addPage();
+      y = 20;
+    }
+  };
+
+  doc.setFontSize(18);
+  doc.text('Portfolio Summary', marginX, y);
+  y += 7;
+  doc.setFontSize(10);
+  doc.setTextColor(100);
+  doc.text(`Generated ${new Date().toLocaleDateString()}`, marginX, y);
+  doc.setTextColor(0);
+  y += 12;
+
+  // Key numbers
+  doc.setFontSize(12);
+  const stats = [
+    ['Projects', summary.totalProjects],
+    ['Total Issues', summary.totalIssues],
+    ['Complete', `${summary.overallCompletionPct}%`],
+    ['Blocked', summary.totalBlocked],
+    ['Overdue Epics', summary.totalOverdueEpics],
+  ];
+  stats.forEach(([label, value]) => {
+    ensureRoom(7);
+    doc.text(`${label}: ${value}`, marginX, y);
+    y += 7;
+  });
+  y += 6;
+
+  // Narrative — same deterministic sentences shown on screen
+  doc.setFontSize(11);
+  summary.paragraphs.forEach(para => {
+    const lines = doc.splitTextToSize(para, 180);
+    lines.forEach(line => {
+      ensureRoom(6);
+      doc.text(line, marginX, y);
+      y += 6;
+    });
+    y += 3;
+  });
+
+  // Highest-risk projects
+  if (summary.topRisks.length > 0) {
+    y += 4;
+    ensureRoom(9);
+    doc.setFontSize(13);
+    doc.text('Highest-Risk Projects', marginX, y);
+    y += 8;
+    doc.setFontSize(11);
+    summary.topRisks.forEach(p => {
+      ensureRoom(7);
+      doc.text(`${p.name} (${p.key}) - risk ${p.riskScore}/100`, marginX, y);
+      y += 7;
+    });
+  }
+
+  doc.save(`portfolio-summary-${new Date().toISOString().slice(0, 10)}.pdf`);
 }
 
 // Visual node-edge diagram of dependency relationships, built with
@@ -1370,7 +1442,16 @@ export default function App() {
 
         {activeTab === 'summary' && (
           <section className="summary-section" id="panel-summary" role="tabpanel">
-            <h2>Portfolio Summary</h2>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 20px' }}>
+              <h2 style={{ margin: 0 }}>Portfolio Summary</h2>
+              <button
+                onClick={() => exportSummaryAsPDF(portfolioSummary)}
+                disabled={loading || portfolioSummary.totalProjects === 0}
+                data-testid="export-summary-pdf"
+              >
+                Export as PDF
+              </button>
+            </div>
 
             {loading ? (
               <p style={{ padding: '0 20px' }}>Loading summary…</p>

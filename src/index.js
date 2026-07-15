@@ -93,14 +93,27 @@ resolver.define('getProjectStats', async ({ payload }) => {
   // The legacy /rest/api/3/search endpoint (and its "total" field) has been
   // removed by Atlassian. Counts now come from the approximate-count endpoint,
   // and we no longer get a free "total" back from a plain issue search.
-  const [all, done, blocked, inProgress, overdueEpics, earliestEpic, latestEpic] = await Promise.all([
+  const [all, done, inProgress, overdueEpics, blockedData, earliestEpic, latestEpic] = await Promise.all([
     jiraPost('/rest/api/3/search/approximate-count', { jql: base }),
     jiraPost('/rest/api/3/search/approximate-count', { jql: `${base} AND statusCategory = Done` }),
-    jiraPost('/rest/api/3/search/approximate-count', { jql: `${base} AND status = "Blocked"` }),
     jiraPost('/rest/api/3/search/approximate-count', { jql: `${base} AND statusCategory = "In Progress"` }),
     // Epics past their due date that aren't done yet — feeds the risk score.
     jiraPost('/rest/api/3/search/approximate-count', {
       jql: `${base} AND issuetype = Epic AND duedate < now() AND statusCategory != Done`,
+    }),
+    // "Blocked" = has an inward "Blocks" link to another issue that isn't
+    // Done yet. Deliberately NOT `status = "Blocked"` — plenty of real
+    // Jira workflows (verified against this exact site) never add that
+    // status at all, and represent blocking purely through issue links
+    // instead, which is the same signal the Dependencies tab visualizes.
+    // There's no single JQL clause for "has an unresolved blocking link"
+    // without a marketplace scripting app, so this fetches issues with
+    // their links and counts client-side. Capped at 100 issues per
+    // project — larger projects will undercount until this is paginated.
+    jiraGet('/rest/api/3/search/jql', {
+      jql: base,
+      maxResults: '100',
+      fields: 'status,issuelinks',
     }),
     // Earliest epic start date for this project, used to power the Projects
     // table's Start column and the date-range filter (previously always
@@ -119,11 +132,18 @@ resolver.define('getProjectStats', async ({ payload }) => {
   ]);
 
   const total = all.count ?? 0;
-  const blockedCount = blocked.count ?? 0;
+  const blockedCount = (blockedData.issues || []).filter(issue =>
+    (issue.fields.issuelinks || []).some(l =>
+      l.type?.name === 'Blocks' &&
+      l.inwardIssue &&
+      l.inwardIssue.fields?.status?.statusCategory?.key !== 'done'
+    )
+  ).length;
   const overdueCount = overdueEpics.count ?? 0;
 
   // Risk score (0-100), documented so it's easy to audit and adjust:
-  //   - 50% weight: share of this project's issues currently Blocked.
+  //   - 50% weight: share of this project's issues currently blocked by an
+  //     unresolved dependency.
   //   - 50% weight: overdue epics, capped at 3 (a 4th+ overdue epic doesn't
   //     make the project meaningfully riskier for scoring purposes, it's
   //     already maxed out that component).
