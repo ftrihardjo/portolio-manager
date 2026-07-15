@@ -399,6 +399,102 @@ describe('App', () => {
         expect(screen.queryByText(/Task B/i)).not.toBeInTheDocument();
       }, { timeout: 3000 });
     });
+
+    // ── NEW: Search / Status / Only-Linked Filter Tests ────────────────
+    it('filters dependencies by search text (issue key or title)', async () => {
+      const deps = [
+        { id: 'T1', title: 'Fix login bug', project: 'PROJ1', type: 'bug', statusCategory: 'new', statusName: 'To Do', links: [] },
+        { id: 'T2', title: 'Add checkout flow', project: 'PROJ1', type: 'story', statusCategory: 'new', statusName: 'To Do', links: [] },
+      ];
+      mockInvoke({ getProjects: projectsMock, getIssueDependencies: () => deps });
+
+      render(<App />);
+      await waitFor(() => screen.getByText('Alpha'));
+      fireEvent.click(screen.getByRole('tab', { name: /Dependencies/i }));
+      await waitFor(() => screen.getByText(/Fix login bug/i));
+
+      fireEvent.change(screen.getByTestId('search-dependencies'), { target: { value: 'checkout' } });
+
+      await waitFor(() => {
+        expect(screen.getByText(/Add checkout flow/i)).toBeInTheDocument();
+        expect(screen.queryByText(/Fix login bug/i)).not.toBeInTheDocument();
+      });
+    });
+
+    it('filters dependencies by status category', async () => {
+      const deps = [
+        { id: 'T1', title: 'Task A', project: 'PROJ1', type: 'task', statusCategory: 'done', statusName: 'Done', links: [] },
+        { id: 'T2', title: 'Task B', project: 'PROJ1', type: 'task', statusCategory: 'new', statusName: 'To Do', links: [] },
+      ];
+      mockInvoke({ getProjects: projectsMock, getIssueDependencies: () => deps });
+
+      render(<App />);
+      await waitFor(() => screen.getByText('Alpha'));
+      fireEvent.click(screen.getByRole('tab', { name: /Dependencies/i }));
+      await waitFor(() => screen.getByText(/Task A/i));
+
+      fireEvent.change(screen.getByTestId('filter-dependency-status'), { target: { value: 'done' } });
+
+      await waitFor(() => {
+        expect(screen.getByText(/Task A/i)).toBeInTheDocument();
+        expect(screen.queryByText(/Task B/i)).not.toBeInTheDocument();
+      });
+    });
+
+    it('shows only issues with dependencies when the toggle is checked', async () => {
+      const deps = [
+        { id: 'T1', title: 'Linked issue', project: 'PROJ1', type: 'task', statusCategory: 'new', statusName: 'To Do', links: [{ type: 'Blocks', outward: 'T2' }] },
+        { id: 'T2', title: 'Isolated issue', project: 'PROJ1', type: 'task', statusCategory: 'new', statusName: 'To Do', links: [] },
+      ];
+      mockInvoke({ getProjects: projectsMock, getIssueDependencies: () => deps });
+
+      render(<App />);
+      await waitFor(() => screen.getByText('Alpha'));
+      fireEvent.click(screen.getByRole('tab', { name: /Dependencies/i }));
+      await waitFor(() => screen.getByText(/Linked issue/i));
+      expect(screen.getByText(/Isolated issue/i)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('filter-only-linked'));
+
+      await waitFor(() => {
+        expect(screen.getByText(/Linked issue/i)).toBeInTheDocument();
+        expect(screen.queryByText(/Isolated issue/i)).not.toBeInTheDocument();
+      });
+    });
+
+    it('paginates the dependency card list at 10 per page without truncating the graph', async () => {
+      const manyDeps = Array.from({ length: 15 }, (_, i) => ({
+        id: `T${i + 1}`,
+        title: `Issue ${i + 1}`,
+        project: 'PROJ1',
+        type: 'task',
+        statusCategory: 'new',
+        statusName: 'To Do',
+        links: [],
+      }));
+      mockInvoke({ getProjects: projectsMock, getIssueDependencies: () => manyDeps });
+
+      render(<App />);
+      await waitFor(() => screen.getByText('Alpha'));
+      fireEvent.click(screen.getByRole('tab', { name: /Dependencies/i }));
+      await waitFor(() => screen.getByText(/Issue 1\b/));
+
+      // The graph canvas should still mount for all 15 issues — pagination
+      // only applies to the card list below it.
+      expect(screen.getByTestId('dependency-graph-canvas')).toBeInTheDocument();
+
+      // Only the first 10 cards should be visible on page 1.
+      expect(screen.getByText(/Issue 10\b/)).toBeInTheDocument();
+      expect(screen.queryByText(/Issue 11\b/)).not.toBeInTheDocument();
+      expect(screen.getByText(/Page 1 of 2/)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByText('Next'));
+
+      await waitFor(() => {
+        expect(screen.getByText(/Issue 11\b/)).toBeInTheDocument();
+        expect(screen.queryByText(/Issue 1\b/)).not.toBeInTheDocument();
+      });
+    });
   });
 
   // ──────────────────────────────────────────────────────────────────────
@@ -484,6 +580,83 @@ describe('App', () => {
       const epic1 = screen.getByText('Epic 1').closest('.timeline-item');
       expect(epic1).not.toHaveClass('overlapping');
       expect(epic1).toHaveStyle({ borderLeft: '4px solid #0052cc' });
+    });
+
+    it('filters the roadmap by search text without affecting overlap detection', async () => {
+      const epicsList = [
+        { id: 'E1', title: 'Login redesign', project: 'PROJ1', statusCategory: 'indeterminate', startDate: '2025-01-01', dueDate: '2025-03-01', assignee: 'Alice' },
+        { id: 'E2', title: 'Checkout revamp', project: 'PROJ1', statusCategory: 'done', startDate: '2025-02-01', dueDate: '2025-04-01', assignee: 'Bob' }, // overlaps E1
+      ];
+      mockInvoke({ getProjects: projectsMock, getRoadmapEpics: () => epicsList });
+
+      render(<App />);
+      await waitFor(() => screen.getByText('Alpha'));
+      fireEvent.click(screen.getByRole('tab', { name: /Roadmap/i }));
+      await waitFor(() => screen.getByText('Login redesign'));
+
+      fireEvent.change(screen.getByTestId('search-roadmap'), { target: { value: 'login' } });
+
+      await waitFor(() => {
+        expect(screen.getByText('Login redesign')).toBeInTheDocument();
+        expect(screen.queryByText('Checkout revamp')).not.toBeInTheDocument();
+      });
+
+      // The filtered-out epic is still part of the overlap calculation —
+      // Login redesign should still show as overlapping even though the
+      // epic it overlaps with is currently hidden by the search filter.
+      const epic1 = screen.getByText('Login redesign').closest('.timeline-item');
+      expect(epic1).toHaveClass('overlapping');
+    });
+
+    it('filters the roadmap by date range', async () => {
+      const epicsList = [
+        { id: 'E1', title: 'Early epic', project: 'PROJ1', statusCategory: 'new', startDate: '2025-01-01', dueDate: '2025-01-15', assignee: null },
+        { id: 'E2', title: 'Late epic', project: 'PROJ1', statusCategory: 'new', startDate: '2025-06-01', dueDate: '2025-06-15', assignee: null },
+      ];
+      mockInvoke({ getProjects: projectsMock, getRoadmapEpics: () => epicsList });
+
+      render(<App />);
+      await waitFor(() => screen.getByText('Alpha'));
+      fireEvent.click(screen.getByRole('tab', { name: /Roadmap/i }));
+      await waitFor(() => screen.getByText('Early epic'));
+
+      const inputs = screen.getAllByLabelText(/Filter roadmap by start date/i);
+      fireEvent.change(inputs[0], { target: { value: '2025-01-01' } });
+      fireEvent.change(inputs[1], { target: { value: '2025-02-01' } });
+
+      await waitFor(() => {
+        expect(screen.getByText('Early epic')).toBeInTheDocument();
+        expect(screen.queryByText('Late epic')).not.toBeInTheDocument();
+      });
+    });
+
+    it('paginates the epic timeline at 10 per page', async () => {
+      const manyEpics = Array.from({ length: 12 }, (_, i) => ({
+        id: `EPIC-${i + 1}`,
+        title: `Epic ${i + 1}`,
+        project: 'PROJ1',
+        statusCategory: 'new',
+        startDate: null,
+        dueDate: null,
+        assignee: null,
+      }));
+      mockInvoke({ getProjects: projectsMock, getRoadmapEpics: () => manyEpics });
+
+      render(<App />);
+      await waitFor(() => screen.getByText('Alpha'));
+      fireEvent.click(screen.getByRole('tab', { name: /Roadmap/i }));
+      await waitFor(() => screen.getByText(/Epic 1\b/));
+
+      expect(screen.getByText(/Epic 10\b/)).toBeInTheDocument();
+      expect(screen.queryByText(/Epic 11\b/)).not.toBeInTheDocument();
+      expect(screen.getByText(/Page 1 of 2/)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByText('Next'));
+
+      await waitFor(() => {
+        expect(screen.getByText(/Epic 11\b/)).toBeInTheDocument();
+        expect(screen.queryByText(/Epic 1\b/)).not.toBeInTheDocument();
+      });
     });
   });
 

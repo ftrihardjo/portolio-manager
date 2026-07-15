@@ -150,6 +150,15 @@ function DependencyGraph({ issues, circularPath, onNodeClick }) {
 
   return (
     <div style={{ padding: '0 20px' }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '6px' }}>
+        <button
+          onClick={() => networkRef.current?.fit({ animation: { duration: 300, easingFunction: 'easeInOutQuad' } })}
+          style={{ fontSize: '12px' }}
+          aria-label="Fit graph to screen"
+        >
+          Fit to Screen
+        </button>
+      </div>
       <div
         ref={containerRef}
         data-testid="dependency-graph-canvas"
@@ -184,6 +193,13 @@ export default function App() {
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selectedLead, setSelectedLead] = useState('');
   const [depTypeFilter, setDepTypeFilter] = useState('');
+  const [depSearchQuery, setDepSearchQuery] = useState('');
+  const [depStatusFilter, setDepStatusFilter] = useState('');
+  const [depOnlyLinked, setDepOnlyLinked] = useState(false);
+  const [roadmapSearchQuery, setRoadmapSearchQuery] = useState('');
+  const [depCurrentPage, setDepCurrentPage] = useState(1);
+  const [roadmapCurrentPage, setRoadmapCurrentPage] = useState(1);
+  const [roadmapDateFilter, setRoadmapDateFilter] = useState({ start: '', end: '' });
   const [currentPage, setCurrentPage] = useState(1);
   const [layoutDir, setLayoutDir] = useState('ltr');
   const [srAnnouncement, setSrAnnouncement] = useState('');
@@ -469,9 +485,47 @@ export default function App() {
   }, [filteredAndSortedProjects, currentPage]);
 
   const filteredDependencies = useMemo(() => {
-    if (!depTypeFilter) return dependencies;
-    return dependencies.filter(d => d.links?.some(l => l.type === depTypeFilter));
-  }, [dependencies, depTypeFilter]);
+    let result = dependencies;
+
+    if (depTypeFilter) {
+      result = result.filter(d => d.links?.some(l => l.type === depTypeFilter));
+    }
+
+    if (depSearchQuery) {
+      const q = depSearchQuery.toLowerCase();
+      result = result.filter(d =>
+        d.id.toLowerCase().includes(q) || (d.title && d.title.toLowerCase().includes(q))
+      );
+    }
+
+    if (depStatusFilter) {
+      result = result.filter(d => d.statusCategory === depStatusFilter);
+    }
+
+    if (depOnlyLinked) {
+      result = result.filter(d => d.links && d.links.length > 0);
+    }
+
+    return result;
+  }, [dependencies, depTypeFilter, depSearchQuery, depStatusFilter, depOnlyLinked]);
+
+  // Paginates the accessible card list only — the graph above it keeps
+  // seeing the full filtered set, since cutting a dependency graph off at
+  // a page boundary would silently hide real edges to issues on other
+  // pages, which defeats the point of a dependency diagram.
+  const paginatedDependencies = useMemo(() => {
+    const startIndex = (depCurrentPage - 1) * 10;
+    return filteredDependencies.slice(startIndex, startIndex + 10);
+  }, [filteredDependencies, depCurrentPage]);
+
+  useEffect(() => {
+    setDepCurrentPage(1);
+  }, [depTypeFilter, depSearchQuery, depStatusFilter, depOnlyLinked, selectedProjects]);
+
+  // Distinct status categories actually present, for the Dependencies status filter.
+  const uniqueDepStatusCategories = useMemo(() => {
+    return [...new Set(dependencies.map(d => d.statusCategory).filter(Boolean))];
+  }, [dependencies]);
 
   useEffect(() => {
     if (activeTab === 'dependencies' && !loading) {
@@ -553,6 +607,49 @@ export default function App() {
        return { ...epic, isOverlapping };
     });
   }, [epics]);
+
+  // Search/date filters for what's actually *displayed* in the Roadmap tab.
+  // Deliberately kept separate from processedEpics itself — the overlap
+  // detection above (and the portfolio summary's overlap count) need to see
+  // every epic regardless of what the user currently has filtered in view,
+  // or a "hide the other overlapping epic" filter would silently make a
+  // real overlap invisible instead of just decluttering the timeline.
+  const filteredRoadmapEpics = useMemo(() => {
+    let result = processedEpics;
+
+    if (roadmapSearchQuery) {
+      const q = roadmapSearchQuery.toLowerCase();
+      result = result.filter(e =>
+        e.id.toLowerCase().includes(q) || (e.title && e.title.toLowerCase().includes(q))
+      );
+    }
+
+    if (roadmapDateFilter.start && roadmapDateFilter.end) {
+      const rawStart = new Date(roadmapDateFilter.start);
+      const rawEnd = new Date(roadmapDateFilter.end);
+      const filterStart = rawStart <= rawEnd ? rawStart : rawEnd;
+      const filterEnd = rawStart <= rawEnd ? rawEnd : rawStart;
+      result = result.filter(e => {
+        if (!e.startDate && !e.dueDate) return true;
+        const eStart = e.startDate ? new Date(e.startDate) : null;
+        const eEnd = e.dueDate ? new Date(e.dueDate) : null;
+        if (eEnd && eEnd < filterStart) return false;
+        if (eStart && eStart > filterEnd) return false;
+        return true;
+      });
+    }
+
+    return result;
+  }, [processedEpics, roadmapSearchQuery, roadmapDateFilter]);
+
+  const paginatedRoadmapEpics = useMemo(() => {
+    const startIndex = (roadmapCurrentPage - 1) * 10;
+    return filteredRoadmapEpics.slice(startIndex, startIndex + 10);
+  }, [filteredRoadmapEpics, roadmapCurrentPage]);
+
+  useEffect(() => {
+    setRoadmapCurrentPage(1);
+  }, [roadmapSearchQuery, roadmapDateFilter, selectedProjects]);
 
   // ── Portfolio Summary ────────────────────────────────────────────────
   // Deterministic, template-based text generation from data already in
@@ -968,7 +1065,7 @@ export default function App() {
             <h2>Dependencies</h2>
             
             {/* Filter Bar */}
-            <div className="filter-bar" style={{ display: 'flex', gap: '15px', alignItems: 'center', padding: '0 20px 10px' }}>
+            <div className="filter-bar" style={{ display: 'flex', gap: '15px', alignItems: 'center', padding: '0 20px 10px', flexWrap: 'wrap' }}>
               <div>
                 <span>Filter by project:</span>
                 {projects.map(p => (
@@ -981,7 +1078,30 @@ export default function App() {
                   </label>
                 ))}
               </div>
-              
+
+              {/* Search by issue key or title */}
+              <input
+                type="text"
+                data-testid="search-dependencies"
+                placeholder="Search issues…"
+                value={depSearchQuery}
+                onChange={(e) => setDepSearchQuery(e.target.value)}
+                aria-label="Search dependencies by issue key or title"
+              />
+
+              {/* Status Filter */}
+              <select
+                data-testid="filter-dependency-status"
+                value={depStatusFilter}
+                onChange={(e) => setDepStatusFilter(e.target.value)}
+                aria-label="Filter by issue status"
+              >
+                <option value="">All Statuses</option>
+                {uniqueDepStatusCategories.map(s => (
+                  <option key={s} value={s}>{s === 'indeterminate' ? 'In Progress' : s === 'new' ? 'To Do' : s === 'done' ? 'Done' : s}</option>
+                ))}
+              </select>
+
               {/* Link Type Filter */}
               <select
                 data-testid="filter-dependency-type"
@@ -992,6 +1112,16 @@ export default function App() {
                 <option value="">All Link Types</option>
                 {uniqueDepTypes.map(t => <option key={t} value={t}>{t}</option>)}
               </select>
+
+              {/* Only issues with dependencies — cuts noise on the graph/list */}
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={depOnlyLinked}
+                  onChange={(e) => setDepOnlyLinked(e.target.checked)}
+                  data-testid="filter-only-linked"
+                /> Only show issues with dependencies
+              </label>
             </div>
 
             {/* Loading / Empty / Content States */}
@@ -1008,7 +1138,7 @@ export default function App() {
                 {filteredDependencies.length === 0 ? (
                   <p>No issues found.</p>
                 ) : (
-                  filteredDependencies.map(issue => (
+                  paginatedDependencies.map(issue => (
                     <div key={issue.id} className="dependency-node" style={{ 
                       border: '1px solid #ddd', 
                       padding: '10px', 
@@ -1076,6 +1206,20 @@ export default function App() {
                   ))
                 )}
                 </div>
+                {filteredDependencies.length > 10 && (
+                  <div style={{ padding: '10px 20px', display: 'flex', gap: '10px', alignItems: 'center' }}>
+                    <button disabled={depCurrentPage === 1} onClick={() => setDepCurrentPage(p => p - 1)}>Prev</button>
+                    <span style={{ fontSize: '12px', color: '#666' }}>
+                      Page {depCurrentPage} of {Math.ceil(filteredDependencies.length / 10)}
+                    </span>
+                    <button
+                      disabled={filteredDependencies.length <= depCurrentPage * 10}
+                      onClick={() => setDepCurrentPage(p => p + 1)}
+                    >
+                      Next
+                    </button>
+                  </div>
+                )}
               </>
             )}
           </section>
@@ -1086,17 +1230,59 @@ export default function App() {
             <h2>Roadmap</h2>
             
             {/* Project Filter */}
-            <div className="filter-bar" style={{ padding: '0 20px 10px' }}>
-              <span>Filter by project:</span>
-              {projects.map(p => (
-                <label key={p.key} className="checkbox-label" style={{ marginLeft: '10px' }}>
-                  <input
-                    type="checkbox"
-                    checked={selectedProjects.includes(p.key)}
-                    onChange={() => toggleProject(p.key)}
-                  /> {p.name}
-                </label>
-              ))}
+            <div className="filter-bar" style={{ padding: '0 20px 10px', display: 'flex', gap: '15px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <div>
+                <span>Filter by project:</span>
+                {projects.map(p => (
+                  <label key={p.key} className="checkbox-label" style={{ marginLeft: '10px' }}>
+                    <input
+                      type="checkbox"
+                      checked={selectedProjects.includes(p.key)}
+                      onChange={() => toggleProject(p.key)}
+                    /> {p.name}
+                  </label>
+                ))}
+              </div>
+
+              {/* Search by epic key or title */}
+              <input
+                type="text"
+                data-testid="search-roadmap"
+                placeholder="Search epics…"
+                value={roadmapSearchQuery}
+                onChange={(e) => setRoadmapSearchQuery(e.target.value)}
+                aria-label="Search roadmap by epic key or title"
+              />
+
+              {/* Date range — the one filter that's genuinely core to a
+                  roadmap/timeline view, unlike the Projects tab's version
+                  of this control which doesn't apply here at all. */}
+              <input
+                type="date"
+                value={roadmapDateFilter.start}
+                onChange={(e) => setRoadmapDateFilter(prev => ({ ...prev, start: e.target.value }))}
+                aria-label="Filter roadmap by start date from"
+                max={roadmapDateFilter.end || undefined}
+              />
+              <span>to</span>
+              <input
+                type="date"
+                value={roadmapDateFilter.end}
+                onChange={(e) => setRoadmapDateFilter(prev => ({ ...prev, end: e.target.value }))}
+                aria-label="Filter roadmap by start date to"
+                min={roadmapDateFilter.start || undefined}
+              />
+              {(roadmapSearchQuery || roadmapDateFilter.start || roadmapDateFilter.end) && (
+                <button
+                  onClick={() => {
+                    setRoadmapSearchQuery('');
+                    setRoadmapDateFilter({ start: '', end: '' });
+                  }}
+                  style={{ fontSize: '12px' }}
+                >
+                  Clear Filters
+                </button>
+              )}
             </div>
             
             {/* Loading / Empty / Content States */}
@@ -1105,10 +1291,10 @@ export default function App() {
             ) : (
               <div className="timeline-container" style={{ padding: '0 20px', maxHeight: '400px', overflowY: 'auto' }}>
                 <div className="timeline">
-                  {processedEpics.length === 0 ? (
+                  {filteredRoadmapEpics.length === 0 ? (
                     <p>No epics with dates found.</p>
                   ) : (
-                    processedEpics.map(epic => (
+                    paginatedRoadmapEpics.map(epic => (
                       <div 
                         key={epic.id} 
                         className={`timeline-item epic-bar ${epic.isOverlapping ? 'overlapping' : ''}`} 
@@ -1163,6 +1349,20 @@ export default function App() {
                     ))
                   )}
                 </div>
+                {filteredRoadmapEpics.length > 10 && (
+                  <div style={{ padding: '10px 20px', display: 'flex', gap: '10px', alignItems: 'center' }}>
+                    <button disabled={roadmapCurrentPage === 1} onClick={() => setRoadmapCurrentPage(p => p - 1)}>Prev</button>
+                    <span style={{ fontSize: '12px', color: '#666' }}>
+                      Page {roadmapCurrentPage} of {Math.ceil(filteredRoadmapEpics.length / 10)}
+                    </span>
+                    <button
+                      disabled={filteredRoadmapEpics.length <= roadmapCurrentPage * 10}
+                      onClick={() => setRoadmapCurrentPage(p => p + 1)}
+                    >
+                      Next
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </section>
