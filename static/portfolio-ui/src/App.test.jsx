@@ -1074,6 +1074,25 @@ describe('App', () => {
       });
     });
 
+    it('routes the Blocked stat click into the Dependencies tab instead of a broken JQL search', async () => {
+      render(<App />);
+      await waitFor(() => screen.getByTestId('stats-blocked-PROJ1'));
+
+      fireEvent.click(screen.getByTestId('stats-blocked-PROJ1'));
+
+      // Should switch tabs in-app, not call router.open with a
+      // status = "Blocked" JQL clause (invalid on workflows without that
+      // exact status name).
+      expect(router.open).not.toHaveBeenCalledWith(
+        expect.stringContaining('status')
+      );
+      await waitFor(() => {
+        expect(screen.getByRole('tab', { name: /Dependencies/i })).toHaveAttribute('aria-selected', 'true');
+      });
+      // Scoped to just the project that was clicked.
+      expect(screen.getByLabelText('Alpha')).toBeChecked();
+    });
+
     it('should filter by date range with overlap logic', async () => {
       render(<App />);
       await waitFor(() => screen.getByText('Alpha'));

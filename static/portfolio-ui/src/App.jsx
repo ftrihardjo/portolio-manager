@@ -9,11 +9,14 @@ const TABS = ['projects', 'dependencies', 'roadmap', 'summary'];
 
 // Builds the JQL used to open the Jira issue navigator for a given
 // project + status filter combo (mirrors the JQL used by getProjectStats).
+// Note: there's deliberately no "blocked" case here — see the Blocked
+// stats button's onClick, which routes to the Dependencies tab instead of
+// generating JQL, since `status = "Blocked"` isn't valid JQL on workflows
+// that don't define that status (as confirmed on this site) and there's
+// no native JQL clause for "has an unresolved blocking link".
 function jqlForProjectStatus(projectKey, status) {
   const base = `project = "${projectKey}"`;
   switch (status) {
-    case 'blocked':
-      return `${base} AND status = "Blocked"`;
     case 'done':
       return `${base} AND statusCategory = Done`;
     case 'inProgress':
@@ -1064,8 +1067,19 @@ export default function App() {
                           <button
                             data-testid={`stats-blocked-${p.key}`}
                             onClick={() => {
-                              openIssuesInJira(p.key, 'blocked');
-                              setSrAnnouncement(`Viewing blocked issues for ${p.key}`);
+                              // Native JQL has no clause for "has an
+                              // unresolved blocking link" without a
+                              // scripting app, so `status = "Blocked"`
+                              // fails outright on workflows that don't
+                              // define that status (confirmed on this
+                              // site). Route to the Dependencies tab
+                              // instead, where blocking is computed from
+                              // the actual link graph, scoped to this
+                              // project and filtered to linked issues only.
+                              setSelectedProjects([p.key]);
+                              setDepOnlyLinked(true);
+                              setActiveTab('dependencies');
+                              setSrAnnouncement(`Viewing blocked issues for ${p.key} in Dependencies`);
                             }}
                             className="blocked-flag"
                             style={{
