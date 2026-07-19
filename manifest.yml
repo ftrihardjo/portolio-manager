@@ -1,6 +1,5 @@
 app:
   id: "ari:cloud:ecosystem::app/07bbc7e7-e540-49bf-b835-6763e4aaaf3e"
-  name: Portfolio Manager for Jira
   runtime:
     name: nodejs22.x
   licensing:

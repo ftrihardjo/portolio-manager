@@ -19,7 +19,10 @@ jest.mock('@forge/api', () => ({
     asUser: jest.fn(),
   },
   route: jest.fn(),
-  storage: {
+}));
+
+jest.mock('@forge/kvs', () => ({
+  kvs: {
     get: jest.fn(),
     set: jest.fn(),
     delete: jest.fn(),
@@ -27,7 +30,8 @@ jest.mock('@forge/api', () => ({
 }));
 
 import { handler } from './index';
-import api, { route, storage } from '@forge/api';
+import api, { route } from '@forge/api';
+import { kvs } from '@forge/kvs';
 
 // route mock – simply concatenates strings (URLSearchParams is converted to string automatically)
 route.mockImplementation((strings, ...values) => {
@@ -50,12 +54,12 @@ beforeEach(() => {
   api.asUser.mockReturnValue({ requestJira: requestJiraMock });
 
   fakeStorage = new Map();
-  storage.get.mockReset().mockImplementation((key) => Promise.resolve(fakeStorage.get(key)));
-  storage.set.mockReset().mockImplementation((key, value) => {
+  kvs.get.mockReset().mockImplementation((key) => Promise.resolve(fakeStorage.get(key)));
+  kvs.set.mockReset().mockImplementation((key, value) => {
     fakeStorage.set(key, value);
     return Promise.resolve();
   });
-  storage.delete.mockReset().mockImplementation((key) => {
+  kvs.delete.mockReset().mockImplementation((key) => {
     fakeStorage.delete(key);
     return Promise.resolve();
   });

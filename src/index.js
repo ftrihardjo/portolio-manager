@@ -1,5 +1,6 @@
 import Resolver from '@forge/resolver';
-import api, { route, storage } from '@forge/api';
+import api, { route } from '@forge/api';
+import { kvs } from '@forge/kvs';
 
 const resolver = new Resolver();
 
@@ -264,13 +265,13 @@ resolver.define('getCurrentUser', async ({ context }) => {
 });
 
 resolver.define('getBpmnDiagrams', async () => {
-  const index = (await storage.get(BPMN_INDEX_KEY)) || [];
+  const index = (await kvs.get(BPMN_INDEX_KEY)) || [];
   return index;
 });
 
 resolver.define('getBpmnDiagram', async ({ payload }) => {
   const { diagramId } = payload;
-  const diagram = await storage.get(bpmnDiagramKey(diagramId));
+  const diagram = await kvs.get(bpmnDiagramKey(diagramId));
   if (!diagram) throw new Error(`Diagram ${diagramId} not found`);
   return diagram;
 });
@@ -287,7 +288,7 @@ resolver.define('saveBpmnDiagram', async ({ payload, context }) => {
   const id = diagramId || `bpmn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const now = new Date().toISOString();
 
-  const existing = diagramId ? await storage.get(bpmnDiagramKey(id)) : null;
+  const existing = diagramId ? await kvs.get(bpmnDiagramKey(id)) : null;
   const record = {
     id,
     name,
@@ -296,14 +297,14 @@ resolver.define('saveBpmnDiagram', async ({ payload, context }) => {
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };
-  await storage.set(bpmnDiagramKey(id), record);
+  await kvs.set(bpmnDiagramKey(id), record);
 
-  const index = (await storage.get(BPMN_INDEX_KEY)) || [];
+  const index = (await kvs.get(BPMN_INDEX_KEY)) || [];
   const meta = { id, name, projectKey, updatedAt: now };
   const nextIndex = diagramId
     ? index.map(d => (d.id === id ? meta : d))
     : [...index, meta];
-  await storage.set(BPMN_INDEX_KEY, nextIndex);
+  await kvs.set(BPMN_INDEX_KEY, nextIndex);
 
   return record;
 });
@@ -312,7 +313,7 @@ resolver.define('deleteBpmnDiagram', async ({ payload, context }) => {
   const { diagramId } = payload;
   const accountId = context?.accountId ?? null;
 
-  const diagram = await storage.get(bpmnDiagramKey(diagramId));
+  const diagram = await kvs.get(bpmnDiagramKey(diagramId));
   if (!diagram) return { deleted: false };
 
   const leadAccountId = await getProjectLeadAccountId(diagram.projectKey);
@@ -320,9 +321,9 @@ resolver.define('deleteBpmnDiagram', async ({ payload, context }) => {
     throw new Error('Only the project lead can delete this diagram.');
   }
 
-  await storage.delete(bpmnDiagramKey(diagramId));
-  const index = (await storage.get(BPMN_INDEX_KEY)) || [];
-  await storage.set(BPMN_INDEX_KEY, index.filter(d => d.id !== diagramId));
+  await kvs.delete(bpmnDiagramKey(diagramId));
+  const index = (await kvs.get(BPMN_INDEX_KEY)) || [];
+  await kvs.set(BPMN_INDEX_KEY, index.filter(d => d.id !== diagramId));
 
   return { deleted: true };
 });
