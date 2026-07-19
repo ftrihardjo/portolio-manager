@@ -41,6 +41,22 @@ jest.mock('jspdf', () => ({
   })),
 }));
 
+// bpmn-js ships raw ESM source in node_modules (no CJS build), which Jest
+// can't parse without transformation, and its rendering needs a real
+// canvas/SVG environment jsdom doesn't fully provide either. Mock both the
+// Modeler (editable) and NavigatedViewer (read-only) constructors with a
+// minimal stand-in exposing the same instance methods App.jsx calls.
+function mockBpmnInstanceFactory() {
+  return {
+    importXML: jest.fn().mockResolvedValue({ warnings: [] }),
+    saveXML: jest.fn().mockResolvedValue({ xml: '<xml>mock-saved</xml>' }),
+    on: jest.fn(),
+    destroy: jest.fn(),
+  };
+}
+jest.mock('bpmn-js/lib/Modeler', () => jest.fn().mockImplementation(() => mockBpmnInstanceFactory()));
+jest.mock('bpmn-js/lib/NavigatedViewer', () => jest.fn().mockImplementation(() => mockBpmnInstanceFactory()));
+
 // Suppress expected React warnings in tests
 const originalError = console.error;
 console.error = (...args) => {
@@ -784,6 +800,103 @@ describe('App', () => {
       const docInstance = jsPDF.mock.results[jsPDF.mock.results.length - 1].value;
       expect(docInstance.text).toHaveBeenCalledWith('Portfolio Summary', expect.any(Number), expect.any(Number));
       expect(docInstance.save).toHaveBeenCalledWith(expect.stringMatching(/^portfolio-summary-\d{4}-\d{2}-\d{2}\.pdf$/));
+    });
+  });
+
+  describe('BPMN tab', () => {
+    const projectsMock = [
+      { id: 1, key: 'PROJ1', name: 'Alpha', lead: 'John', leadAccountId: 'acc-lead', avatarUrl: null },
+      { id: 2, key: 'PROJ2', name: 'Beta', lead: 'Jane', leadAccountId: 'acc-other', avatarUrl: null },
+    ];
+
+    it('shows an empty state and lets the lead create a new diagram', async () => {
+      mockInvoke({
+        getProjects: projectsMock,
+        getCurrentUser: { accountId: 'acc-lead' },
+        getBpmnDiagrams: [],
+      });
+
+      render(<App />);
+      await waitFor(() => screen.getByText('Alpha'));
+      fireEvent.click(screen.getByRole('tab', { name: /BPMN/i }));
+
+      await waitFor(() => expect(screen.getByTestId('bpmn-diagram-list')).toHaveTextContent('No diagrams yet.'));
+
+      fireEvent.click(screen.getByTestId('new-bpmn-diagram'));
+
+      // PROJ1's lead is the logged-in user, so it should default to
+      // editable (Modeler mounts, Save button appears) for PROJ1 (the
+      // first project in the dropdown).
+      await waitFor(() => expect(screen.getByTestId('bpmn-canvas')).toBeInTheDocument());
+      expect(screen.getByTestId('save-bpmn')).toBeInTheDocument();
+    });
+
+    it('creates a diagram as the project lead and it appears in the library', async () => {
+      let savedDiagram = null;
+      mockInvoke({
+        getProjects: projectsMock,
+        getCurrentUser: { accountId: 'acc-lead' },
+        getBpmnDiagrams: () => (savedDiagram ? [savedDiagram] : []),
+        saveBpmnDiagram: (payload) => {
+          savedDiagram = { id: 'diagram-1', name: payload.name, projectKey: payload.projectKey, updatedAt: '2026-01-01' };
+          return { ...savedDiagram, xml: payload.xml, createdAt: '2026-01-01' };
+        },
+      });
+
+      render(<App />);
+      await waitFor(() => screen.getByText('Alpha'));
+      fireEvent.click(screen.getByRole('tab', { name: /BPMN/i }));
+      await waitFor(() => screen.getByTestId('new-bpmn-diagram'));
+
+      fireEvent.click(screen.getByTestId('new-bpmn-diagram'));
+      fireEvent.change(screen.getByTestId('new-diagram-name'), { target: { value: 'Order Process' } });
+      fireEvent.change(screen.getByTestId('new-diagram-project'), { target: { value: 'PROJ1' } });
+
+      await waitFor(() => screen.getByTestId('save-bpmn'));
+      fireEvent.click(screen.getByTestId('save-bpmn'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('bpmn-diagram-list')).toHaveTextContent('Order Process');
+      });
+    });
+
+    it('shows a read-only viewer (no Save button) for a diagram owned by another project\'s lead', async () => {
+      mockInvoke({
+        getProjects: projectsMock,
+        getCurrentUser: { accountId: 'acc-not-a-lead' },
+        getBpmnDiagrams: [{ id: 'diagram-1', name: 'Refund Flow', projectKey: 'PROJ1', updatedAt: '2026-01-01' }],
+        getBpmnDiagram: { id: 'diagram-1', name: 'Refund Flow', projectKey: 'PROJ1', xml: '<xml/>' },
+      });
+
+      render(<App />);
+      await waitFor(() => screen.getByText('Alpha'));
+      fireEvent.click(screen.getByRole('tab', { name: /BPMN/i }));
+      await waitFor(() => screen.getByText('Refund Flow'));
+
+      fireEvent.click(screen.getByText('Refund Flow'));
+
+      await waitFor(() => expect(screen.getByTestId('bpmn-canvas')).toBeInTheDocument());
+      expect(screen.getByText(/only this project's lead can edit this diagram/i)).toBeInTheDocument();
+      expect(screen.queryByTestId('save-bpmn')).not.toBeInTheDocument();
+    });
+
+    it('only shows the Delete option next to diagrams the current user leads', async () => {
+      mockInvoke({
+        getProjects: projectsMock,
+        getCurrentUser: { accountId: 'acc-lead' },
+        getBpmnDiagrams: [
+          { id: 'diagram-1', name: 'Mine', projectKey: 'PROJ1', updatedAt: '2026-01-01' },
+          { id: 'diagram-2', name: 'Not mine', projectKey: 'PROJ2', updatedAt: '2026-01-01' },
+        ],
+      });
+
+      render(<App />);
+      await waitFor(() => screen.getByText('Alpha'));
+      fireEvent.click(screen.getByRole('tab', { name: /BPMN/i }));
+      await waitFor(() => screen.getByText('Mine'));
+
+      expect(screen.getByTestId('delete-bpmn-diagram-1')).toBeInTheDocument();
+      expect(screen.queryByTestId('delete-bpmn-diagram-2')).not.toBeInTheDocument();
     });
   });
 

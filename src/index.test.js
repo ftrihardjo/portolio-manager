@@ -19,10 +19,15 @@ jest.mock('@forge/api', () => ({
     asUser: jest.fn(),
   },
   route: jest.fn(),
+  storage: {
+    get: jest.fn(),
+    set: jest.fn(),
+    delete: jest.fn(),
+  },
 }));
 
 import { handler } from './index';
-import api, { route } from '@forge/api';
+import api, { route, storage } from '@forge/api';
 
 // route mock – simply concatenates strings (URLSearchParams is converted to string automatically)
 route.mockImplementation((strings, ...values) => {
@@ -38,9 +43,22 @@ route.mockImplementation((strings, ...values) => {
 
 let requestJiraMock;
 
+let fakeStorage;
+
 beforeEach(() => {
   requestJiraMock = jest.fn();
   api.asUser.mockReturnValue({ requestJira: requestJiraMock });
+
+  fakeStorage = new Map();
+  storage.get.mockReset().mockImplementation((key) => Promise.resolve(fakeStorage.get(key)));
+  storage.set.mockReset().mockImplementation((key, value) => {
+    fakeStorage.set(key, value);
+    return Promise.resolve();
+  });
+  storage.delete.mockReset().mockImplementation((key) => {
+    fakeStorage.delete(key);
+    return Promise.resolve();
+  });
 });
 
 function getResolver(name) {
@@ -72,7 +90,7 @@ describe('getProjects', () => {
           id: 1,
           key: 'TEST',
           name: 'Test Project',
-          lead: { displayName: 'John' },
+          lead: { displayName: 'John', accountId: 'acc-123' },
           avatarUrls: { '32x32': 'https://avatar.url' },
         },
       ],
@@ -91,6 +109,7 @@ describe('getProjects', () => {
         key: 'TEST',
         name: 'Test Project',
         lead: 'John',
+        leadAccountId: 'acc-123',
         avatarUrl: 'https://avatar.url',
       },
     ]);
@@ -101,7 +120,7 @@ describe('getProjects', () => {
       values: [{ id: 2, key: 'PROJ', name: 'Proj', lead: null, avatarUrls: {} }],
     });
     const result = await getResolver('getProjects')();
-    expect(result[0]).toMatchObject({ lead: null, avatarUrl: null });
+    expect(result[0]).toMatchObject({ lead: null, leadAccountId: null, avatarUrl: null });
   });
 
   it('handles empty project list', async () => {
@@ -389,5 +408,150 @@ describe('getRoadmapEpics', () => {
     expect(epic.startDate).toBeNull();
     expect(epic.dueDate).toBeNull();
     expect(epic.assignee).toBeNull();
+  });
+});
+
+describe('BPMN diagrams (getCurrentUser, getBpmnDiagrams, getBpmnDiagram, saveBpmnDiagram, deleteBpmnDiagram)', () => {
+  const LEAD_ACCOUNT_ID = 'lead-acc-1';
+  const OTHER_ACCOUNT_ID = 'other-acc-2';
+
+  function mockProjectLead(projectKey, accountId) {
+    // getProjectLeadAccountId() calls GET /rest/api/3/project/{key}?expand=lead
+    mockJiraResponse({ lead: { accountId } });
+  }
+
+  it('returns the calling user\'s accountId from context', async () => {
+    const result = await getResolver('getCurrentUser')({ context: { accountId: 'me-123' } });
+    expect(result).toEqual({ accountId: 'me-123' });
+  });
+
+  it('returns an empty list when no diagrams have been created', async () => {
+    const result = await getResolver('getBpmnDiagrams')({});
+    expect(result).toEqual([]);
+  });
+
+  it('lets the project lead create a new diagram', async () => {
+    mockProjectLead('TEST', LEAD_ACCOUNT_ID);
+
+    const result = await getResolver('saveBpmnDiagram')({
+      payload: { diagramId: null, name: 'Order Process', projectKey: 'TEST', xml: '<xml/>' },
+      context: { accountId: LEAD_ACCOUNT_ID },
+    });
+
+    expect(result).toMatchObject({ name: 'Order Process', projectKey: 'TEST', xml: '<xml/>' });
+    expect(result.id).toBeTruthy();
+    expect(result.createdAt).toBe(result.updatedAt);
+
+    const index = await getResolver('getBpmnDiagrams')({});
+    expect(index).toEqual([{ id: result.id, name: 'Order Process', projectKey: 'TEST', updatedAt: result.updatedAt }]);
+  });
+
+  it('rejects a save from anyone who is not the project lead', async () => {
+    mockProjectLead('TEST', LEAD_ACCOUNT_ID);
+
+    await expect(
+      getResolver('saveBpmnDiagram')({
+        payload: { diagramId: null, name: 'Order Process', projectKey: 'TEST', xml: '<xml/>' },
+        context: { accountId: OTHER_ACCOUNT_ID },
+      })
+    ).rejects.toThrow('Only the project lead can edit this diagram.');
+
+    const index = await getResolver('getBpmnDiagrams')({});
+    expect(index).toEqual([]);
+  });
+
+  it('rejects a save with no authenticated user at all', async () => {
+    mockProjectLead('TEST', LEAD_ACCOUNT_ID);
+
+    await expect(
+      getResolver('saveBpmnDiagram')({
+        payload: { diagramId: null, name: 'Order Process', projectKey: 'TEST', xml: '<xml/>' },
+        context: {},
+      })
+    ).rejects.toThrow('Only the project lead can edit this diagram.');
+  });
+
+  it('updates an existing diagram in place, preserving createdAt', async () => {
+    mockProjectLead('TEST', LEAD_ACCOUNT_ID);
+    const created = await getResolver('saveBpmnDiagram')({
+      payload: { diagramId: null, name: 'v1', projectKey: 'TEST', xml: '<xml v="1"/>' },
+      context: { accountId: LEAD_ACCOUNT_ID },
+    });
+
+    mockProjectLead('TEST', LEAD_ACCOUNT_ID);
+    const updated = await getResolver('saveBpmnDiagram')({
+      payload: { diagramId: created.id, name: 'v2', projectKey: 'TEST', xml: '<xml v="2"/>' },
+      context: { accountId: LEAD_ACCOUNT_ID },
+    });
+
+    expect(updated.id).toBe(created.id);
+    expect(updated.name).toBe('v2');
+    expect(updated.createdAt).toBe(created.createdAt);
+
+    const index = await getResolver('getBpmnDiagrams')({});
+    expect(index).toHaveLength(1);
+    expect(index[0].name).toBe('v2');
+  });
+
+  it('fetches a single diagram by id, and throws for an unknown id', async () => {
+    mockProjectLead('TEST', LEAD_ACCOUNT_ID);
+    const created = await getResolver('saveBpmnDiagram')({
+      payload: { diagramId: null, name: 'Order Process', projectKey: 'TEST', xml: '<xml/>' },
+      context: { accountId: LEAD_ACCOUNT_ID },
+    });
+
+    const fetched = await getResolver('getBpmnDiagram')({ payload: { diagramId: created.id } });
+    expect(fetched).toEqual(created);
+
+    await expect(
+      getResolver('getBpmnDiagram')({ payload: { diagramId: 'does-not-exist' } })
+    ).rejects.toThrow('Diagram does-not-exist not found');
+  });
+
+  it('lets the project lead delete a diagram', async () => {
+    mockProjectLead('TEST', LEAD_ACCOUNT_ID);
+    const created = await getResolver('saveBpmnDiagram')({
+      payload: { diagramId: null, name: 'Order Process', projectKey: 'TEST', xml: '<xml/>' },
+      context: { accountId: LEAD_ACCOUNT_ID },
+    });
+
+    mockProjectLead('TEST', LEAD_ACCOUNT_ID);
+    const result = await getResolver('deleteBpmnDiagram')({
+      payload: { diagramId: created.id },
+      context: { accountId: LEAD_ACCOUNT_ID },
+    });
+
+    expect(result).toEqual({ deleted: true });
+    expect(await getResolver('getBpmnDiagrams')({})).toEqual([]);
+    await expect(
+      getResolver('getBpmnDiagram')({ payload: { diagramId: created.id } })
+    ).rejects.toThrow();
+  });
+
+  it('rejects a delete from anyone who is not the project lead', async () => {
+    mockProjectLead('TEST', LEAD_ACCOUNT_ID);
+    const created = await getResolver('saveBpmnDiagram')({
+      payload: { diagramId: null, name: 'Order Process', projectKey: 'TEST', xml: '<xml/>' },
+      context: { accountId: LEAD_ACCOUNT_ID },
+    });
+
+    mockProjectLead('TEST', LEAD_ACCOUNT_ID);
+    await expect(
+      getResolver('deleteBpmnDiagram')({
+        payload: { diagramId: created.id },
+        context: { accountId: OTHER_ACCOUNT_ID },
+      })
+    ).rejects.toThrow('Only the project lead can delete this diagram.');
+
+    // Still there, since the delete was rejected.
+    expect(await getResolver('getBpmnDiagrams')({})).toHaveLength(1);
+  });
+
+  it('deleting a diagram that does not exist is a no-op, not an error', async () => {
+    const result = await getResolver('deleteBpmnDiagram')({
+      payload: { diagramId: 'never-existed' },
+      context: { accountId: LEAD_ACCOUNT_ID },
+    });
+    expect(result).toEqual({ deleted: false });
   });
 });

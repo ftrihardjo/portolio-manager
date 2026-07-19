@@ -1,5 +1,5 @@
 import Resolver from '@forge/resolver';
-import api, { route } from '@forge/api';
+import api, { route, storage } from '@forge/api';
 
 const resolver = new Resolver();
 
@@ -82,6 +82,10 @@ resolver.define('getProjects', async () => {
     key: p.key,
     name: p.name,
     lead: p.lead?.displayName ?? null,
+    // Needed (not just the display name) to check who's allowed to edit a
+    // project's BPMN diagrams — accountId is what actually identifies a
+    // user, display names aren't guaranteed unique or stable.
+    leadAccountId: p.lead?.accountId ?? null,
     avatarUrl: p.avatarUrls?.['32x32'] ?? null,
   }));
 });
@@ -220,6 +224,107 @@ resolver.define('getRoadmapEpics', async ({ payload }) => {
     dueDate: issue.fields.duedate ?? null,
     assignee: issue.fields.assignee?.displayName ?? null,
   }));
+});
+
+// ─── BPMN diagram library ───────────────────────────────────────────────
+// A standalone library of BPMN process diagrams (not tied to any one issue
+// or epic), stored in Forge app storage. Each diagram is associated with
+// one project; only that project's Lead can edit it, everyone else who can
+// open this app gets a read-only view. Permission is always re-checked
+// server-side on write — the client's opinion of who's allowed to edit is
+// never trusted, since it's trivial to forge a client-side check.
+
+const BPMN_INDEX_KEY = 'bpmn:index';
+const bpmnDiagramKey = (id) => `bpmn:diagram:${id}`;
+
+const EMPTY_BPMN_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:process id="Process_1" isExecutable="false">
+    <bpmn:startEvent id="StartEvent_1" />
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Process_1">
+      <bpmndi:BPMNShape id="StartEvent_1_di" bpmnElement="StartEvent_1">
+        <dc:Bounds x="152" y="102" width="36" height="36" />
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>`;
+
+// Looks up a project's lead accountId directly from Jira (not from
+// whatever the client sent), so permission checks can't be spoofed by a
+// crafted payload.
+async function getProjectLeadAccountId(projectKey) {
+  const project = await jiraGet(`/rest/api/3/project/${projectKey}`, { expand: 'lead' });
+  return project.lead?.accountId ?? null;
+}
+
+resolver.define('getCurrentUser', async ({ context }) => {
+  return { accountId: context?.accountId ?? null };
+});
+
+resolver.define('getBpmnDiagrams', async () => {
+  const index = (await storage.get(BPMN_INDEX_KEY)) || [];
+  return index;
+});
+
+resolver.define('getBpmnDiagram', async ({ payload }) => {
+  const { diagramId } = payload;
+  const diagram = await storage.get(bpmnDiagramKey(diagramId));
+  if (!diagram) throw new Error(`Diagram ${diagramId} not found`);
+  return diagram;
+});
+
+resolver.define('saveBpmnDiagram', async ({ payload, context }) => {
+  const { diagramId, name, projectKey, xml } = payload;
+  const accountId = context?.accountId ?? null;
+
+  const leadAccountId = await getProjectLeadAccountId(projectKey);
+  if (!accountId || accountId !== leadAccountId) {
+    throw new Error('Only the project lead can edit this diagram.');
+  }
+
+  const id = diagramId || `bpmn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const now = new Date().toISOString();
+
+  const existing = diagramId ? await storage.get(bpmnDiagramKey(id)) : null;
+  const record = {
+    id,
+    name,
+    projectKey,
+    xml,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+  await storage.set(bpmnDiagramKey(id), record);
+
+  const index = (await storage.get(BPMN_INDEX_KEY)) || [];
+  const meta = { id, name, projectKey, updatedAt: now };
+  const nextIndex = diagramId
+    ? index.map(d => (d.id === id ? meta : d))
+    : [...index, meta];
+  await storage.set(BPMN_INDEX_KEY, nextIndex);
+
+  return record;
+});
+
+resolver.define('deleteBpmnDiagram', async ({ payload, context }) => {
+  const { diagramId } = payload;
+  const accountId = context?.accountId ?? null;
+
+  const diagram = await storage.get(bpmnDiagramKey(diagramId));
+  if (!diagram) return { deleted: false };
+
+  const leadAccountId = await getProjectLeadAccountId(diagram.projectKey);
+  if (!accountId || accountId !== leadAccountId) {
+    throw new Error('Only the project lead can delete this diagram.');
+  }
+
+  await storage.delete(bpmnDiagramKey(diagramId));
+  const index = (await storage.get(BPMN_INDEX_KEY)) || [];
+  await storage.set(BPMN_INDEX_KEY, index.filter(d => d.id !== diagramId));
+
+  return { deleted: true };
 });
 
 export const handler = resolver.getDefinitions();

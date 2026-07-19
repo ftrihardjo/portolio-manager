@@ -2,10 +2,16 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke, router } from '@forge/bridge';
 import { Network, DataSet } from 'vis-network/standalone';
 import { jsPDF } from 'jspdf';
+import BpmnModeler from 'bpmn-js/lib/Modeler';
+import BpmnViewer from 'bpmn-js/lib/NavigatedViewer';
 import 'vis-network/styles/vis-network.css';
+import 'bpmn-js/dist/assets/diagram-js.css';
+import 'bpmn-js/dist/assets/bpmn-font/css/bpmn-embedded.css';
 import './App.css';
 
-const TABS = ['projects', 'dependencies', 'roadmap', 'summary'];
+const TABS = ['projects', 'dependencies', 'roadmap', 'summary', 'bpmn'];
+const TAB_LABELS = { bpmn: 'BPMN' };
+const tabLabel = (tab) => TAB_LABELS[tab] || (tab.charAt(0).toUpperCase() + tab.slice(1));
 
 // Builds the JQL used to open the Jira issue navigator for a given
 // project + status filter combo (mirrors the JQL used by getProjectStats).
@@ -51,6 +57,22 @@ async function invokeWithRetry(cmd, payload = {}, retries = 3, delay = 150) {
   }
 }
 
+// jsPDF's default fonts only support the WinAnsi/ASCII character set. The
+// on-screen narrative uses real Unicode characters (arrows especially) that
+// render fine in the browser but corrupt jsPDF's output — not just visually
+// (the arrow rendered as mangled characters), but functionally: an
+// unsupported glyph throws off jsPDF's internal line-width math, which is
+// what was silently eating part of the circular-dependency sentence in the
+// exported PDF. Everything written to the PDF goes through this first.
+function sanitizeForPdf(str) {
+  return String(str)
+    .replace(/→/g, '->')
+    .replace(/←/g, '<-')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/[\u2013\u2014]/g, '-');
+}
+
 // Builds a one-page (or more, if content overflows) executive PDF from the
 // same deterministic summary data already shown in the Summary tab. Pure
 // client-side generation via jsPDF — no server round-trip, no AI API cost.
@@ -67,12 +89,19 @@ function exportSummaryAsPDF(summary) {
     }
   };
 
+  const writeLine = (text, size) => {
+    if (size) doc.setFontSize(size);
+    ensureRoom(6);
+    doc.text(sanitizeForPdf(text), marginX, y);
+    y += 6;
+  };
+
   doc.setFontSize(18);
   doc.text('Portfolio Summary', marginX, y);
   y += 7;
   doc.setFontSize(10);
   doc.setTextColor(100);
-  doc.text(`Generated ${new Date().toLocaleDateString()}`, marginX, y);
+  doc.text(sanitizeForPdf(`Generated ${new Date().toLocaleDateString()}`), marginX, y);
   doc.setTextColor(0);
   y += 12;
 
@@ -87,15 +116,19 @@ function exportSummaryAsPDF(summary) {
   ];
   stats.forEach(([label, value]) => {
     ensureRoom(7);
-    doc.text(`${label}: ${value}`, marginX, y);
+    doc.text(sanitizeForPdf(`${label}: ${value}`), marginX, y);
     y += 7;
   });
   y += 6;
 
-  // Narrative — same deterministic sentences shown on screen
+  // Narrative — same deterministic sentences shown on screen, sanitized
+  // before both the width measurement (splitTextToSize) and the actual
+  // write, since a mismatch between the two is exactly what caused text
+  // to go missing before.
   doc.setFontSize(11);
   summary.paragraphs.forEach(para => {
-    const lines = doc.splitTextToSize(para, 180);
+    const cleanPara = sanitizeForPdf(para);
+    const lines = doc.splitTextToSize(cleanPara, 180);
     lines.forEach(line => {
       ensureRoom(6);
       doc.text(line, marginX, y);
@@ -114,7 +147,7 @@ function exportSummaryAsPDF(summary) {
     doc.setFontSize(11);
     summary.topRisks.forEach(p => {
       ensureRoom(7);
-      doc.text(`${p.name} (${p.key}) - risk ${p.riskScore}/100`, marginX, y);
+      doc.text(sanitizeForPdf(`${p.name} (${p.key}) - risk ${p.riskScore}/100`), marginX, y);
       y += 7;
     });
   }
@@ -253,6 +286,81 @@ function DependencyGraph({ issues, circularPath, onNodeClick }) {
   );
 }
 
+// Minimal valid BPMN 2.0 XML with a single start event — bpmn-js needs
+// *something* to import even for a brand-new, never-saved diagram.
+const EMPTY_BPMN_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:process id="Process_1" isExecutable="false">
+    <bpmn:startEvent id="StartEvent_1" />
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Process_1">
+      <bpmndi:BPMNShape id="StartEvent_1_di" bpmnElement="StartEvent_1">
+        <dc:Bounds x="152" y="102" width="36" height="36" />
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>`;
+
+// Renders a BPMN diagram with bpmn-js. Project leads get the full Modeler
+// (palette, drag-to-edit, save); everyone else gets NavigatedViewer — a
+// genuinely separate, read-only bpmn-js build, not just a modeler with
+// buttons hidden, so viewers can't edit via keyboard shortcuts or by
+// poking at the DOM either.
+function BpmnDiagramView({ diagramXml, canEdit, onSave, onDirtyChange }) {
+  const containerRef = useRef(null);
+  const instanceRef = useRef(null);
+
+  useEffect(() => {
+    if (!containerRef.current) return undefined;
+
+    const Ctor = canEdit ? BpmnModeler : BpmnViewer;
+    const instance = new Ctor({ container: containerRef.current });
+    instanceRef.current = instance;
+
+    instance.importXML(diagramXml || EMPTY_BPMN_XML).catch((err) => {
+      console.error('Failed to load BPMN diagram', err);
+    });
+
+    if (canEdit) {
+      instance.on('commandStack.changed', () => onDirtyChange?.(true));
+    }
+
+    return () => {
+      instance.destroy();
+      instanceRef.current = null;
+    };
+    // Deliberately re-mounts the whole diagram when switching which
+    // diagram is open or toggling edit mode — bpmn-js instances aren't
+    // meant to be reused across a different XML document. (onDirtyChange
+    // and onSave are intentionally left out of the dependency array below:
+    // they're stable per-render closures here, and including them would
+    // force a pointless remount of the bpmn-js instance on every render.)
+  }, [diagramXml, canEdit]);
+
+  const handleSave = async () => {
+    if (!instanceRef.current) return;
+    const { xml } = await instanceRef.current.saveXML({ format: true });
+    await onSave(xml);
+    onDirtyChange?.(false);
+  };
+
+  return (
+    <div>
+      <div
+        ref={containerRef}
+        data-testid="bpmn-canvas"
+        style={{ height: '500px', border: '1px solid #ddd', borderRadius: '4px', background: '#fff' }}
+      />
+      {canEdit && (
+        <div style={{ padding: '10px 0' }}>
+          <button onClick={handleSave} data-testid="save-bpmn">Save Diagram</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [projects, setProjects] = useState([]);
   const [stats, setStats] = useState({});
@@ -277,6 +385,13 @@ export default function App() {
   const [roadmapDateFilter, setRoadmapDateFilter] = useState({ start: '', end: '' });
   const [currentPage, setCurrentPage] = useState(1);
   const [layoutDir, setLayoutDir] = useState('ltr');
+  const [bpmnDiagrams, setBpmnDiagrams] = useState([]);
+  const [currentUserAccountId, setCurrentUserAccountId] = useState(null);
+  const [selectedDiagramId, setSelectedDiagramId] = useState(null);
+  const [selectedDiagramXml, setSelectedDiagramXml] = useState(null);
+  const [bpmnDirty, setBpmnDirty] = useState(false);
+  const [newDiagramName, setNewDiagramName] = useState('');
+  const [newDiagramProjectKey, setNewDiagramProjectKey] = useState('');
   const [srAnnouncement, setSrAnnouncement] = useState('');
   const [sortBy, setSortBy] = useState('key');
   const [sortOrder, setSortOrder] = useState('asc');
@@ -399,6 +514,78 @@ export default function App() {
     };
   }, [projects]);
 
+  async function loadBpmnDiagrams() {
+    setLoading(true);
+    try {
+      const [diagrams, user] = await Promise.all([
+        invokeWithRetry('getBpmnDiagrams', {}),
+        currentUserAccountId ? Promise.resolve({ accountId: currentUserAccountId }) : invokeWithRetry('getCurrentUser', {}),
+      ]);
+      setBpmnDiagrams(diagrams || []);
+      if (user?.accountId) setCurrentUserAccountId(user.accountId);
+    } catch (e) {
+      setError('BPMN load error: ' + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function openBpmnDiagram(diagramId) {
+    setLoading(true);
+    setError(null);
+    try {
+      const diagram = await invokeWithRetry('getBpmnDiagram', { diagramId });
+      setSelectedDiagramId(diagram.id);
+      setSelectedDiagramXml(diagram.xml);
+      setBpmnDirty(false);
+    } catch (e) {
+      setError('Failed to open diagram: ' + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function startNewBpmnDiagram() {
+    setSelectedDiagramId(null);
+    setSelectedDiagramXml(null);
+    setBpmnDirty(false);
+    setNewDiagramName('');
+    setNewDiagramProjectKey(projects[0]?.key || '');
+  }
+
+  async function saveBpmnDiagram(xml) {
+    try {
+      const diagram = await invokeWithRetry('saveBpmnDiagram', {
+        diagramId: selectedDiagramId,
+        name: selectedDiagramId
+          ? bpmnDiagrams.find(d => d.id === selectedDiagramId)?.name
+          : newDiagramName,
+        projectKey: selectedDiagramId
+          ? bpmnDiagrams.find(d => d.id === selectedDiagramId)?.projectKey
+          : newDiagramProjectKey,
+        xml,
+      });
+      setSelectedDiagramId(diagram.id);
+      setSrAnnouncement(`Saved diagram ${diagram.name}`);
+      await loadBpmnDiagrams();
+    } catch (e) {
+      setError('Failed to save diagram: ' + e.message);
+    }
+  }
+
+  async function deleteBpmnDiagram(diagramId) {
+    try {
+      await invokeWithRetry('deleteBpmnDiagram', { diagramId });
+      if (selectedDiagramId === diagramId) {
+        setSelectedDiagramId(null);
+        setSelectedDiagramXml(null);
+      }
+      await loadBpmnDiagrams();
+    } catch (e) {
+      setError('Failed to delete diagram: ' + e.message);
+    }
+  }
+
   useEffect(() => {
     setError(null);
     if (activeTab === 'dependencies') {
@@ -407,6 +594,8 @@ export default function App() {
       loadEpics();
     } else if (activeTab === 'summary') {
       loadSummaryData();
+    } else if (activeTab === 'bpmn') {
+      loadBpmnDiagrams();
     }
     setSrAnnouncement(`Switched to ${activeTab} tab`);
   }, [activeTab, selectedProjects]);
@@ -423,6 +612,7 @@ export default function App() {
     if (activeTab === 'dependencies') loadDependencies();
     if (activeTab === 'roadmap') loadEpics();
     if (activeTab === 'summary') loadSummaryData();
+    if (activeTab === 'bpmn') loadBpmnDiagrams();
   }
 
   const handleTabKeyDown = (e, index) => {
@@ -726,6 +916,21 @@ export default function App() {
     setRoadmapCurrentPage(1);
   }, [roadmapSearchQuery, roadmapDateFilter, selectedProjects]);
 
+  // Client-side mirror of the same check saveBpmnDiagram/deleteBpmnDiagram
+  // enforce server-side. This one is purely for the UI (showing the
+  // Modeler vs. the read-only Viewer, showing/hiding the Save button) —
+  // it is never the actual security boundary, since a determined client
+  // could always claim canEdit=true locally. The resolver re-checks the
+  // real project lead every time regardless of what the client believes.
+  const canEditDiagram = useMemo(() => {
+    const projectKey = selectedDiagramId
+      ? bpmnDiagrams.find(d => d.id === selectedDiagramId)?.projectKey
+      : newDiagramProjectKey;
+    if (!projectKey || !currentUserAccountId) return false;
+    const project = projects.find(p => p.key === projectKey);
+    return !!project && project.leadAccountId === currentUserAccountId;
+  }, [selectedDiagramId, bpmnDiagrams, newDiagramProjectKey, projects, currentUserAccountId]);
+
   // ── Portfolio Summary ────────────────────────────────────────────────
   // Deterministic, template-based text generation from data already in
   // state — no external AI API call (and therefore no per-request cost).
@@ -845,7 +1050,7 @@ export default function App() {
               onClick={() => setActiveTab(tab)}
               onKeyDown={(e) => handleTabKeyDown(e, idx)}
             >
-              {tab.charAt(0).toUpperCase() + tab.slice(1)}
+              {tabLabel(tab)}
             </button>
           ))}
         </nav>
@@ -1523,6 +1728,113 @@ export default function App() {
                     </ul>
                   </div>
                 )}
+              </div>
+            )}
+          </section>
+        )}
+
+        {activeTab === 'bpmn' && (
+          <section className="bpmn-section" id="panel-bpmn" role="tabpanel">
+            <h2>BPMN Diagrams</h2>
+
+            {loading && !selectedDiagramXml && selectedDiagramId === null && bpmnDiagrams.length === 0 ? (
+              <p style={{ padding: '0 20px' }}>Loading diagrams…</p>
+            ) : (
+              <div style={{ padding: '0 20px', display: 'flex', gap: '20px' }}>
+                {/* Diagram library — left sidebar */}
+                <div style={{ width: '220px', flexShrink: 0 }}>
+                  <button
+                    onClick={startNewBpmnDiagram}
+                    data-testid="new-bpmn-diagram"
+                    style={{ marginBottom: '10px', width: '100%' }}
+                  >
+                    + New Diagram
+                  </button>
+                  <ul style={{ listStyle: 'none', padding: 0, margin: 0 }} data-testid="bpmn-diagram-list">
+                    {bpmnDiagrams.length === 0 && (
+                      <li style={{ color: '#666', fontSize: '13px' }}>No diagrams yet.</li>
+                    )}
+                    {bpmnDiagrams.map(d => {
+                      const project = projects.find(p => p.key === d.projectKey);
+                      const isOwner = project?.leadAccountId === currentUserAccountId;
+                      return (
+                        <li key={d.id} style={{ marginBottom: '6px' }}>
+                          <button
+                            onClick={() => openBpmnDiagram(d.id)}
+                            style={{
+                              display: 'block',
+                              width: '100%',
+                              textAlign: 'left',
+                              background: selectedDiagramId === d.id ? '#e6effc' : 'none',
+                              border: '1px solid #ddd',
+                              borderRadius: '4px',
+                              padding: '6px 8px',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <div style={{ fontWeight: 'bold', fontSize: '13px' }}>{d.name}</div>
+                            <div style={{ fontSize: '11px', color: '#666' }}>
+                              {d.projectKey} {isOwner ? '· you can edit' : '· view only'}
+                            </div>
+                          </button>
+                          {isOwner && (
+                            <button
+                              onClick={() => deleteBpmnDiagram(d.id)}
+                              data-testid={`delete-bpmn-${d.id}`}
+                              style={{ fontSize: '11px', color: '#bf2600', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0' }}
+                            >
+                              Delete
+                            </button>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+
+                {/* Editor / viewer — main area */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {selectedDiagramId === null && selectedDiagramXml === null && !newDiagramProjectKey ? (
+                    <p style={{ color: '#666' }}>
+                      Select a diagram from the library, or create a new one.
+                    </p>
+                  ) : (
+                    <>
+                      {selectedDiagramId === null && (
+                        <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+                          <input
+                            type="text"
+                            placeholder="Diagram name"
+                            value={newDiagramName}
+                            onChange={(e) => setNewDiagramName(e.target.value)}
+                            data-testid="new-diagram-name"
+                          />
+                          <select
+                            value={newDiagramProjectKey}
+                            onChange={(e) => setNewDiagramProjectKey(e.target.value)}
+                            data-testid="new-diagram-project"
+                          >
+                            {projects.map(p => (
+                              <option key={p.key} value={p.key}>{p.name} ({p.key})</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                      {!canEditDiagram && (
+                        <p style={{ fontSize: '12px', color: '#666' }}>
+                          View only — only this project's lead can edit this diagram.
+                        </p>
+                      )}
+                      <BpmnDiagramView
+                        key={selectedDiagramId || 'new'}
+                        diagramXml={selectedDiagramXml}
+                        canEdit={canEditDiagram}
+                        onSave={saveBpmnDiagram}
+                        onDirtyChange={setBpmnDirty}
+                      />
+                    </>
+                  )}
+                </div>
               </div>
             )}
           </section>
