@@ -86,7 +86,7 @@ describe('App', () => {
   // ──────────────────────────────────────────────────────────────────────
   it('renders header and three tabs', () => {
     render(<App />);
-    expect(screen.getByText('Portfolio Manager')).toBeInTheDocument();
+    expect(screen.getByText('BPMN & Portfolio Manager')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /Projects/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /Dependencies/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /Roadmap/i })).toBeInTheDocument();
