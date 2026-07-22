@@ -1,16 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import ReactGA from 'react-ga4';
 import { invoke, router } from '@forge/bridge';
 import { Network, DataSet } from 'vis-network/standalone';
 import { jsPDF } from 'jspdf';
-import BpmnModeler from 'bpmn-js/lib/Modeler';
-import BpmnViewer from 'bpmn-js/lib/NavigatedViewer';
+import BpmnDiagramView from './bpmn/BpmnDiagramView';
 import 'vis-network/styles/vis-network.css';
 import 'bpmn-js/dist/assets/diagram-js.css';
-import 'bpmn-js/dist/assets/bpmn-font/css/bpmn-embedded.css';
+// bpmn-font loaded via BpmnDiagramView (kept with the bpmn-js setup
+// so the import order is deterministic — the bpmn-js CSS resets
+// have to come last to win over our app-level styles).
 import './App.css';
 
 const TABS = ['projects', 'dependencies', 'roadmap', 'summary', 'bpmn'];
 const TAB_LABELS = { bpmn: 'BPMN' };
+const GA4_ID = 'G-396823097';
+ReactGA.initialize(GA4_ID);
 const tabLabel = (tab) => TAB_LABELS[tab] || (tab.charAt(0).toUpperCase() + tab.slice(1));
 
 // Builds the JQL used to open the Jira issue navigator for a given
@@ -37,6 +41,21 @@ function jqlForProjectStatus(projectKey, status) {
 // is a universal permalink that works for every issue and project type.
 function openIssueInJira(issueKey) {
   router.open(`/browse/${encodeURIComponent(issueKey)}`);
+}
+
+// Expose the navigation helpers on window so the bpmn-js properties
+// panel (which lives in a separate React subtree) can call them
+// without prop-drilling. Set up once in App's effect — cleared on
+// unmount so a hot-reload during dev doesn't accumulate stale refs.
+function useBpmnNavigationBridge() {
+  useEffect(() => {
+    window.__openIssueInJira = openIssueInJira;
+    window.__routerOpen = (url) => router.open(url);
+    return () => {
+      delete window.__openIssueInJira;
+      delete window.__routerOpen;
+    };
+  }, []);
 }
 
 // Opens the Jira issue navigator, pre-filtered by the given JQL, in a new tab.
@@ -286,82 +305,15 @@ function DependencyGraph({ issues, circularPath, onNodeClick }) {
   );
 }
 
-// Minimal valid BPMN 2.0 XML with a single start event — bpmn-js needs
-// *something* to import even for a brand-new, never-saved diagram.
-const EMPTY_BPMN_XML = `<?xml version="1.0" encoding="UTF-8"?>
-<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn">
-  <bpmn:process id="Process_1" isExecutable="false">
-    <bpmn:startEvent id="StartEvent_1" />
-  </bpmn:process>
-  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
-    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Process_1">
-      <bpmndi:BPMNShape id="StartEvent_1_di" bpmnElement="StartEvent_1">
-        <dc:Bounds x="152" y="102" width="36" height="36" />
-      </bpmndi:BPMNShape>
-    </bpmndi:BPMNPlane>
-  </bpmndi:BPMNDiagram>
-</bpmn:definitions>`;
-
-// Renders a BPMN diagram with bpmn-js. Project leads get the full Modeler
-// (palette, drag-to-edit, save); everyone else gets NavigatedViewer — a
-// genuinely separate, read-only bpmn-js build, not just a modeler with
-// buttons hidden, so viewers can't edit via keyboard shortcuts or by
-// poking at the DOM either.
-function BpmnDiagramView({ diagramXml, canEdit, onSave, onDirtyChange }) {
-  const containerRef = useRef(null);
-  const instanceRef = useRef(null);
-
-  useEffect(() => {
-    if (!containerRef.current) return undefined;
-
-    const Ctor = canEdit ? BpmnModeler : BpmnViewer;
-    const instance = new Ctor({ container: containerRef.current });
-    instanceRef.current = instance;
-
-    instance.importXML(diagramXml || EMPTY_BPMN_XML).catch((err) => {
-      console.error('Failed to load BPMN diagram', err);
-    });
-
-    if (canEdit) {
-      instance.on('commandStack.changed', () => onDirtyChange?.(true));
-    }
-
-    return () => {
-      instance.destroy();
-      instanceRef.current = null;
-    };
-    // Deliberately re-mounts the whole diagram when switching which
-    // diagram is open or toggling edit mode — bpmn-js instances aren't
-    // meant to be reused across a different XML document. (onDirtyChange
-    // and onSave are intentionally left out of the dependency array below:
-    // they're stable per-render closures here, and including them would
-    // force a pointless remount of the bpmn-js instance on every render.)
-  }, [diagramXml, canEdit]);
-
-  const handleSave = async () => {
-    if (!instanceRef.current) return;
-    const { xml } = await instanceRef.current.saveXML({ format: true });
-    await onSave(xml);
-    onDirtyChange?.(false);
-  };
-
-  return (
-    <div>
-      <div
-        ref={containerRef}
-        data-testid="bpmn-canvas"
-        style={{ height: '500px', border: '1px solid #ddd', borderRadius: '4px', background: '#fff' }}
-      />
-      {canEdit && (
-        <div style={{ padding: '10px 0' }}>
-          <button onClick={handleSave} data-testid="save-bpmn">Save Diagram</button>
-        </div>
-      )}
-    </div>
-  );
-}
+// BpmnDiagramView has been moved to ./bpmn/BpmnDiagramView.jsx so the
+// properties panel + token simulation + moddle extension setup live
+// next to the BPMN-specific code rather than padding out the root
+// App component. The bpmn-js modeler/viewer are no longer imported
+// here directly.
 
 export default function App() {
+  useBpmnNavigationBridge();
+
   const [projects, setProjects] = useState([]);
   const [stats, setStats] = useState({});
   const [dependencies, setDependencies] = useState([]);
@@ -398,6 +350,22 @@ export default function App() {
   const [dateFilter, setDateFilter] = useState({ start: '', end: '' });
   const [statusFilter, setStatusFilter] = useState('');
   const [leadSearch, setLeadSearch] = useState('');
+
+  // ✅ Track tab switches automatically
+    useEffect(() => {
+      ReactGA.send({
+        hitType: 'pageview',
+        page: `/portfolio-manager/${activeTab}`,
+        title: `Portfolio Manager - ${activeTab}`
+      });
+
+      // Also send a custom event for more detailed tracking
+      ReactGA.event({
+        category: 'Navigation',
+        action: 'Tab Switched',
+        label: activeTab,
+      });
+    }, [activeTab]);
 
   // Debounce search query
   useEffect(() => {

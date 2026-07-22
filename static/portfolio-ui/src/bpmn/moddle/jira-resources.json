@@ -1,0 +1,24 @@
+{
+  "name": "JiraResources",
+  "uri": "http://bpmn.io/schema/bpmn/jira-resources",
+  "prefix": "jira",
+  "xml": {
+    "tagAlias": "lowerCase"
+  },
+  "types": [
+    {
+      "name": "LinkedResources",
+      "superClass": ["Element"],
+      "meta": {
+        "allowedIn": ["bpmn:ExtensionElements"]
+      },
+      "properties": [
+        { "name": "issueKey", "type": "String", "isAttr": true },
+        { "name": "confluencePage", "type": "String", "isAttr": true },
+        { "name": "documentation", "type": "String" }
+      ]
+    }
+  ],
+  "emumerations": [],
+  "associations": []
+}

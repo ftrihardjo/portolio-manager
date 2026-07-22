@@ -52,15 +52,53 @@ function mockBpmnInstanceFactory() {
     saveXML: jest.fn().mockResolvedValue({ xml: '<xml>mock-saved</xml>' }),
     on: jest.fn(),
     destroy: jest.fn(),
+    // ✅ Add the 'get' method to prevent "instance.get is not a function" errors
+    get: jest.fn().mockImplementation((name) => {
+      if (name === 'eventBus') {
+        return { on: jest.fn(), off: jest.fn() };
+      }
+      // Return undefined for other modules (like 'propertiesPanel')
+      // so the component's fallback logic can handle it gracefully.
+      return undefined;
+    }),
   };
 }
+
+jest.mock('bpmn-js/lib/util/ModelUtil', () => ({
+  getBusinessObject: jest.fn((element) => element?.businessObject || {}),
+  is: jest.fn(() => false),
+}));
+
 jest.mock('bpmn-js/lib/Modeler', () => jest.fn().mockImplementation(() => mockBpmnInstanceFactory()));
 jest.mock('bpmn-js/lib/NavigatedViewer', () => jest.fn().mockImplementation(() => mockBpmnInstanceFactory()));
+
+// ✅ ADD THESE THREE MOCKS TO PREVENT JEST FROM PARSING ESM FILES:
+jest.mock('@bpmn-io/properties-panel', () => ({
+  __esModule: true,
+  isTextFieldEntryEdited: jest.fn(),
+  TextAreaEntry: jest.fn(),
+  TextFieldEntry: jest.fn(),
+}));
+
+jest.mock('bpmn-js-properties-panel', () => ({
+  BpmnPropertiesPanelModule: 'mocked-properties-panel',
+}));
+
+jest.mock('bpmn-js-token-simulation', () => 'mocked-token-simulation');
+jest.mock('react-ga4', () => ({
+  __esModule: true,
+  default: {
+    initialize: jest.fn(),
+    send: jest.fn(),
+    event: jest.fn(),
+  },
+}));
 
 // Suppress expected React warnings in tests
 const originalError = console.error;
 console.error = (...args) => {
-  if (/Warning:.*act\(\)/.test(args[0]) || /validateDOMNesting/.test(args[0])) return;
+  // ✅ Updated regex to catch both "act()" and "act(...)"
+  if (/Warning:.*act\(/.test(args[0]) || /validateDOMNesting/.test(args[0])) return;
   originalError.call(console, ...args);
 };
 
