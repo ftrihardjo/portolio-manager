@@ -82,6 +82,7 @@ jest.mock('@bpmn-io/properties-panel', () => ({
 
 jest.mock('bpmn-js-properties-panel', () => ({
   BpmnPropertiesPanelModule: 'mocked-properties-panel',
+  useService: jest.fn(),
 }));
 
 jest.mock('bpmn-js-token-simulation', () => 'mocked-token-simulation');

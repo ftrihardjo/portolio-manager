@@ -275,25 +275,19 @@ resolver.define('saveBpmnDiagram', async ({ payload, context }) => {
   const existing = diagramId ? await kvs.get(bpmnDiagramKey(id)) : null;
   const version = (existing?.version || 0) + 1;
   const record = {
-    id,
-    name,
-    projectKey,
-    xml,
+    id, name, projectKey, xml,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
     version,
   };
   await kvs.set(bpmnDiagramKey(id), record);
+
   const index = (await kvs.get(BPMN_INDEX_KEY)) || [];
   const meta = { id, name, projectKey, updatedAt: now, lastEditedBy: accountId, version };
   const nextIndex = diagramId
-    ? index.map(d => (d.id === id ? meta : d))
+    ? index.map((d) => (d.id === id ? meta : d))
     : [...index, meta];
   await kvs.set(BPMN_INDEX_KEY, nextIndex);
-
-  // Emit event so frontend polling/listeners can react
-  await emit('diagram-updated', { diagramId: id, version });
-
   return record;
 });
 

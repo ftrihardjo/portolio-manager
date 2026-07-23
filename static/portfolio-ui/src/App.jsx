@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import ReactGA from 'react-ga4';
 import { invoke, router } from '@forge/bridge';
 import { Network, DataSet } from 'vis-network/standalone';
@@ -6,6 +6,9 @@ import { jsPDF } from 'jspdf';
 import BpmnDiagramView from './bpmn/BpmnDiagramView';
 import 'vis-network/styles/vis-network.css';
 import 'bpmn-js/dist/assets/diagram-js.css';
+import 'bpmn-js/dist/assets/bpmn-font/css/bpmn.css';
+import 'bpmn-js/dist/assets/bpmn-font/css/bpmn-codes.css';
+import 'bpmn-js/dist/assets/bpmn-font/css/bpmn-embedded.css';
 // bpmn-font loaded via BpmnDiagramView (kept with the bpmn-js setup
 // so the import order is deterministic — the bpmn-js CSS resets
 // have to come last to win over our app-level styles).
@@ -310,6 +313,26 @@ function DependencyGraph({ issues, circularPath, onNodeClick }) {
 // next to the BPMN-specific code rather than padding out the root
 // App component. The bpmn-js modeler/viewer are no longer imported
 // here directly.
+
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { console.error('BPMN view crashed:', error, info); }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: 20, border: '1px solid #ffc1c1', borderRadius: 4, background: '#fff5f5' }}>
+          <h3 style={{ marginTop: 0 }}>The diagram view hit an error.</h3>
+          <pre style={{ whiteSpace: 'pre-wrap', color: '#bf2600', fontSize: 12 }}>
+            {String(this.state.error?.message || this.state.error)}
+          </pre>
+          <button onClick={() => this.setState({ error: null })}>Try again</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export default function App() {
   useBpmnNavigationBridge();
@@ -1793,13 +1816,15 @@ export default function App() {
                           View only — only this project's lead can edit this diagram.
                         </p>
                       )}
-                      <BpmnDiagramView
-                        key={selectedDiagramId || 'new'}
-                        diagramXml={selectedDiagramXml}
-                        canEdit={canEditDiagram}
-                        onSave={saveBpmnDiagram}
-                        onDirtyChange={setBpmnDirty}
-                      />
+                      <ErrorBoundary key={selectedDiagramId || 'new'}>
+                        <BpmnDiagramView
+                          key={selectedDiagramId || 'new'}
+                          diagramXml={selectedDiagramXml}
+                          canEdit={canEditDiagram}
+                          onSave={saveBpmnDiagram}
+                          onDirtyChange={setBpmnDirty}
+                        />
+                      </ErrorBoundary>
                     </>
                   )}
                 </div>

@@ -1,24 +1,19 @@
 {
-  "name": "JiraResources",
-  "uri": "http://bpmn.io/schema/bpmn/jira-resources",
+  "name": "Jira",
   "prefix": "jira",
-  "xml": {
-    "tagAlias": "lowerCase"
-  },
+  "uri": "http://felixtrihrdjo.example.com/schema/bpmn/jira",
+  "xml": { "tagAlias": "lowerCase" },
+  "associations": [],
+  "enumerations": [],
   "types": [
     {
-      "name": "LinkedResources",
-      "superClass": ["Element"],
-      "meta": {
-        "allowedIn": ["bpmn:ExtensionElements"]
-      },
+      "name": "JiraLinked",
+      "extends": [ "bpmn:BaseElement" ],
       "properties": [
-        { "name": "issueKey", "type": "String", "isAttr": true },
-        { "name": "confluencePage", "type": "String", "isAttr": true },
-        { "name": "documentation", "type": "String" }
+        { "name": "issueKey",       "isAttr": true, "type": "String" },
+        { "name": "confluencePage", "isAttr": true, "type": "String" },
+        { "name": "documentation",  "isAttr": true, "type": "String" }
       ]
     }
-  ],
-  "emumerations": [],
-  "associations": []
+  ]
 }
