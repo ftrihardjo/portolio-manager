@@ -1,107 +1,161 @@
+import { h } from 'preact';
 import {
   isTextFieldEntryEdited,
   TextAreaEntry,
   TextFieldEntry,
 } from '@bpmn-io/properties-panel';
-// ✅ Correct package. Importing useService from '@bpmn-io/properties-panel'
-//    yields `undefined`, which made the group throw on every selection and
-//    aborted element creation (the red canvas). See bpmn-js-examples.
-import { useService } from 'bpmn-js-properties-panel';
+import { getBusinessObject } from 'bpmn-js/lib/util/ModelUtil';
 
 export const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9]+-\d+$/;
 
-// With the attribute-based descriptor the values live straight on the
-// business object — no extensionElements indirection to manage.
-export function getJiraValues(element) {
-  const bo = element && element.businessObject;
-  const read = (name) => (bo && typeof bo.get === 'function' ? bo.get(name) : bo && bo[name]) || '';
+// --- modeling/moddle bridge ----------------------------------------------
+// The properties panel renders our custom group/entries with Preact and does
+// NOT hand us the modeler, and `useService` is not reliably importable in
+// this project's dependency tree. So we capture modeling + moddle once (from
+// the modeler instance, in BpmnDiagramView) into module scope and read them
+// back here. Safe because only one editor is mounted at a time.
+let _modeling = null;
+let _moddle = null;
+export function setModelerServices(modeling, moddle) {
+  _modeling = modeling;
+  _moddle = moddle;
+}
+
+// --- plain reader (used by BOTH the editable entries and the React viewer) -
+export function getLinkedResources(businessObject) {
+  if (!businessObject || typeof businessObject.get !== 'function') {
+    return { issueKey: '', confluencePage: '', documentation: '' };
+  }
+  const extElements = businessObject.get('extensionElements');
+  const values = (extElements && extElements.get && extElements.get('values')) || [];
+  const ext = values.find((v) => v.$type === 'jira:LinkedResources');
   return {
-    issueKey: read('issueKey'),
-    confluencePage: read('confluencePage'),
-    documentation: read('documentation'),
+    issueKey: ext?.issueKey || '',
+    confluencePage: ext?.confluencePage || '',
+    documentation: ext?.documentation || '',
   };
 }
 
-function GroupShell({ label, children }) {
-  return (
-    <div style={{ padding: '10px 12px', borderBottom: '1px solid #eee' }}>
-      <h3 style={{ fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px', color: '#42526e' }}>
-        {label}
-      </h3>
-      {children}
-    </div>
-  );
+function setLinkedResourceProperty(element, propertyName, value) {
+  if (!_modeling || !_moddle) return; // editor not wired yet → no-op
+  const bo = getBusinessObject(element);
+  let ext = getLinkedResources(bo) && _findExt(bo);
+  let extElements = bo.get('extensionElements');
+  if (!ext) {
+    ext = _moddle.create('jira:LinkedResources');
+    if (extElements) {
+      _modeling.updateModdleProperties(element, extElements, {
+        values: [...(extElements.get('values') || []), ext],
+      });
+    } else {
+      extElements = _moddle.create('bpmn:ExtensionElements', { values: [ext] });
+      _modeling.updateProperties(element, { extensionElements: extElements });
+    }
+  }
+  _modeling.updateModdleProperties(element, ext, {
+    [propertyName]: value === '' ? undefined : value,
+  });
+}
+function _findExt(bo) {
+  const extElements = bo.get('extensionElements');
+  const values = (extElements && extElements.get && extElements.get('values')) || [];
+  return values.find((v) => v.$type === 'jira:LinkedResources') || null;
 }
 
-// Editable group (Modeler). Pulls modeling/debounce from the panel's own
-// DI container via useService — never from props (the panel doesn't pass a
-// `modeler` prop, which is why the old code's edits silently no-op'd).
-function LinkedResourcesGroup({ element }) {
-  const modeling = useService('modeling');
-  const debounce = useService('debounceInput');
-  const { issueKey, confluencePage, documentation } = getJiraValues(element);
+// --- per-field debounce (stable per id, no hooks needed) -----------------
+const _debounceCache = {};
+function debounceFor(id) {
+  if (!_debounceCache[id]) {
+    let timer;
+    _debounceCache[id] = (fn) => (...args) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => fn(...args), 300);
+    };
+  }
+  return _debounceCache[id];
+}
 
-  const set = (name, value) =>
-    modeling.updateProperties(element, { [name]: value || undefined });
+// --- defensive wrappers: a property-panel quirk must NEVER crash the canvas
+function safeText(props) { try { return TextFieldEntry(props); } catch (e) { return null; } }
+function safeArea(props) { try { return TextAreaEntry(props); } catch (e) { return null; } }
 
-  const openInJira = () => {
-    if (ISSUE_KEY_PATTERN.test(issueKey)) window.__openIssueInJira?.(issueKey);
+function OpenButtonsEntry(props) {
+  try {
+    const element = props.element;
+    if (!element) return null;
+    const { issueKey, confluencePage } = getLinkedResources(getBusinessObject(element));
+    return h('div', { style: { display: 'flex', gap: '6px', padding: '4px 0' } },
+      h('button', {
+        type: 'button',
+        onClick: () => { if (ISSUE_KEY_PATTERN.test(issueKey)) window.__openIssueInJira?.(issueKey); },
+        disabled: !ISSUE_KEY_PATTERN.test(issueKey),
+        style: { fontSize: '11px', padding: '4px 8px' },
+      }, 'Open in Jira'),
+      h('button', {
+        type: 'button',
+        onClick: () => { if (confluencePage) window.__routerOpen?.(confluencePage); },
+        disabled: !confluencePage,
+        style: { fontSize: '11px', padding: '4px 8px' },
+      }, 'Open in Confluence'),
+    );
+  } catch (e) { return null; }
+}
+
+function IssueKeyEntry(props) {
+  try {
+    const element = props.element;
+    if (!element) return null;
+    const { issueKey } = getLinkedResources(getBusinessObject(element));
+    return safeText({
+      element, id: 'jiraIssueKey', label: 'Issue Key', description: 'PROJ-123',
+      getValue: () => issueKey,
+      setValue: (v) => setLinkedResourceProperty(element, 'issueKey', v),
+      validate: (v) => (v && !ISSUE_KEY_PATTERN.test(v)) ? 'Must look like PROJ-123' : undefined,
+      debounce: debounceFor('jiraIssueKey'),
+    });
+  } catch (e) { return null; }
+}
+
+function ConfluenceEntry(props) {
+  try {
+    const element = props.element;
+    if (!element) return null;
+    const { confluencePage } = getLinkedResources(getBusinessObject(element));
+    return safeText({
+      element, id: 'jiraConfluencePage', label: 'Confluence URL',
+      getValue: () => confluencePage,
+      setValue: (v) => setLinkedResourceProperty(element, 'confluencePage', v),
+      debounce: debounceFor('jiraConfluencePage'),
+    });
+  } catch (e) { return null; }
+}
+
+function DocEntry(props) {
+  try {
+    const element = props.element;
+    if (!element) return null;
+    const { documentation } = getLinkedResources(getBusinessObject(element));
+    return safeArea({
+      element, id: 'jiraDocumentation', label: 'Documentation',
+      getValue: () => documentation,
+      setValue: (v) => setLinkedResourceProperty(element, 'documentation', v),
+      debounce: debounceFor('jiraDocumentation'),
+    });
+  } catch (e) { return null; }
+}
+
+// Group factory — documented "entries" pattern.
+function LinkedResourcesGroup(element) {
+  return {
+    id: 'jira-linked-resources',
+    label: 'Linked Resources',
+    entries: [
+      { id: 'jiraOpenButtons', component: OpenButtonsEntry },
+      { id: 'jiraIssueKey', component: IssueKeyEntry, isEdited: isTextFieldEntryEdited },
+      { id: 'jiraConfluencePage', component: ConfluenceEntry, isEdited: isTextFieldEntryEdited },
+      { id: 'jiraDocumentation', component: DocEntry, isEdited: isTextFieldEntryEdited },
+    ],
   };
-  const openInConfluence = () => {
-    if (confluencePage) window.__routerOpen?.(confluencePage);
-  };
-
-  return (
-    <GroupShell label="Linked Resources">
-      <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
-        <button
-          type="button"
-          onClick={openInJira}
-          disabled={!ISSUE_KEY_PATTERN.test(issueKey)}
-          title={ISSUE_KEY_PATTERN.test(issueKey) ? `Open ${issueKey} in Jira` : 'Enter a valid Jira issue key first (e.g. PROJ-123)'}
-          style={{ fontSize: '11px', padding: '4px 8px' }}
-        >
-          Open in Jira
-        </button>
-        <button
-          type="button"
-          onClick={openInConfluence}
-          disabled={!confluencePage}
-          title={confluencePage ? 'Open the linked Confluence page' : 'Enter a Confluence page URL first'}
-          style={{ fontSize: '11px', padding: '4px 8px' }}
-        >
-          Open in Confluence
-        </button>
-      </div>
-
-      <TextFieldEntry
-        id="jiraIssueKey"
-        element={element}
-        label="Issue Key"
-        description="PROJ-123"
-        getValue={() => issueKey}
-        setValue={(v) => set('issueKey', v)}
-        validate={(v) => (v && !ISSUE_KEY_PATTERN.test(v) ? 'Must look like PROJ-123' : undefined)}
-        debounce={debounce}
-      />
-      <TextFieldEntry
-        id="jiraConfluencePage"
-        element={element}
-        label="Confluence URL"
-        getValue={() => confluencePage}
-        setValue={(v) => set('confluencePage', v)}
-        debounce={debounce}
-      />
-      <TextAreaEntry
-        id="jiraDocumentation"
-        element={element}
-        label="Documentation"
-        getValue={() => documentation}
-        setValue={(v) => set('documentation', v)}
-        debounce={debounce}
-      />
-    </GroupShell>
-  );
 }
 
 export default class JiraPropertiesProvider {
@@ -110,13 +164,6 @@ export default class JiraPropertiesProvider {
   }
   getGroups(element) {
     if (!element || element.type === 'label' || element.type === 'root') return [];
-    return (groups) => {
-      groups.push({ id: 'jira-linked-resources', component: LinkedResourcesGroup, element });
-      return groups;
-    };
+    return (groups) => groups.concat([LinkedResourcesGroup(element)]);
   }
 }
-
-// Kept only so nothing that imported it breaks; the Viewer no longer uses it
-// (rendering Preact vnodes inside the React tree was the blank-screen bug).
-void isTextFieldEntryEdited;

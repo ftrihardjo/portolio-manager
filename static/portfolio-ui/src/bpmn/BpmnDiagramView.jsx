@@ -6,8 +6,20 @@ import TokenSimulationModule from 'bpmn-js-token-simulation';
 import 'bpmn-js-token-simulation/assets/css/bpmn-js-token-simulation.css';
 import 'bpmn-font/dist/css/bpmn.css';
 import 'bpmn-js/dist/assets/diagram-js.css';
-import JiraPropertiesProvider, { getJiraValues, ISSUE_KEY_PATTERN } from './JiraPropertiesProvider';
+import { getBusinessObject } from 'bpmn-js/lib/util/ModelUtil';
+import JiraPropertiesProvider, {
+  setModelerServices,
+  getLinkedResources,
+  ISSUE_KEY_PATTERN,
+} from './JiraPropertiesProvider';
 import jiraResourcesModdle from './moddle/jira-resources.json';
+
+// Canary: confirm in DevTools console that the freshly built bundle is live.
+console.log('[BpmnDiagramView] build 2026-07-23 v5');
+
+// Larger editing surface, as requested.
+const CANVAS_HEIGHT = 'clamp(560px, 70vh, 900px)';
+const PANEL_WIDTH = 340;
 
 const EMPTY_BPMN_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn">
@@ -23,15 +35,10 @@ const EMPTY_BPMN_XML = `<?xml version="1.0" encoding="UTF-8"?>
   </bpmndi:BPMNDiagram>
 </bpmn:definitions>`;
 
-const EXTENSIONS = { jira: jiraResourcesModdle };
+const MODDLE_EXTENSIONS = { jira: jiraResourcesModdle };
 
-// Responsive sizing — addresses "the editing panel is too small".
-const CANVAS_HEIGHT = 'clamp(440px, 62vh, 780px)';
-const PANEL_WIDTH = 320;
-
-// ── Read-only panel for the Viewer, written in REACT (not Preact). ────────
-// Rendering the Preact group component here used to crash React on selection
-// and blank the whole iframe.
+// --- React read-only panel: plain data + plain JSX (no Preact vnodes here,
+//     which is what used to blank the screen on selection). ----------------
 function Field({ label, value, link, multiline }) {
   if (!value) return null;
   return (
@@ -46,38 +53,6 @@ function Field({ label, value, link, multiline }) {
   );
 }
 
-function ViewerLinkedResources({ element }) {
-  const { issueKey, confluencePage, documentation } = getJiraValues(element);
-  return (
-    <div style={{ padding: '10px 12px' }}>
-      <h3 style={{ fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px', color: '#42526e' }}>
-        Linked Resources
-      </h3>
-      <Field label="Issue Key" value={issueKey} />
-      <Field label="Confluence URL" value={confluencePage} link />
-      <Field label="Documentation" value={documentation} multiline />
-      <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
-        <button
-          type="button"
-          disabled={!ISSUE_KEY_PATTERN.test(issueKey)}
-          onClick={() => window.__openIssueInJira?.(issueKey)}
-          style={{ fontSize: '11px', padding: '4px 8px' }}
-        >
-          Open in Jira
-        </button>
-        <button
-          type="button"
-          disabled={!confluencePage}
-          onClick={() => window.__routerOpen?.(confluencePage)}
-          style={{ fontSize: '11px', padding: '4px 8px' }}
-        >
-          Open in Confluence
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function ViewerPropertiesPanel({ instance }) {
   const [selected, setSelected] = useState(null);
   useEffect(() => {
@@ -88,25 +63,43 @@ function ViewerPropertiesPanel({ instance }) {
     return () => eventBus.off('selection.changed', onSelectionChanged);
   }, [instance]);
 
+  const data = selected ? getLinkedResources(getBusinessObject(selected)) : null;
+
   return (
     <aside
       data-testid="bpmn-properties-panel"
       style={{
-        width: PANEL_WIDTH,
-        flexShrink: 0,
-        border: '1px solid #ddd',
-        borderRadius: '4px',
-        background: '#fff',
-        maxHeight: CANVAS_HEIGHT,
-        overflowY: 'auto',
+        width: PANEL_WIDTH, flexShrink: 0, border: '1px solid #ddd',
+        borderRadius: '4px', background: '#fff', maxHeight: CANVAS_HEIGHT, overflowY: 'auto',
       }}
     >
-      {!selected ? (
+      {!data ? (
         <div style={{ padding: '12px', color: '#666', fontSize: '12px' }}>
           Select an element to see its linked Jira issues and documentation.
         </div>
       ) : (
-        <ViewerLinkedResources element={selected} />
+        <div style={{ padding: '10px 12px' }}>
+          <h3 style={{ fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px', color: '#42526e' }}>
+            Linked Resources
+          </h3>
+          <Field label="Issue Key" value={data.issueKey} />
+          <Field label="Confluence URL" value={data.confluencePage} link />
+          <Field label="Documentation" value={data.documentation} multiline />
+          <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+            <button
+              type="button"
+              onClick={() => { if (ISSUE_KEY_PATTERN.test(data.issueKey)) window.__openIssueInJira?.(data.issueKey); }}
+              disabled={!ISSUE_KEY_PATTERN.test(data.issueKey)}
+              style={{ fontSize: '11px', padding: '4px 8px' }}
+            >Open in Jira</button>
+            <button
+              type="button"
+              onClick={() => { if (data.confluencePage) window.__routerOpen?.(data.confluencePage); }}
+              disabled={!data.confluencePage}
+              style={{ fontSize: '11px', padding: '4px 8px' }}
+            >Open in Confluence</button>
+          </div>
+        </div>
       )}
     </aside>
   );
@@ -129,18 +122,20 @@ export default function BpmnDiagramView({ diagramXml, canEdit, onSave, onDirtyCh
     const inst = new Ctor({
       container: canvasRef.current,
       ...(additionalModules.length > 0 ? { additionalModules } : {}),
-      moddleExtensions: EXTENSIONS,
+      moddleExtensions: MODDLE_EXTENSIONS,
       ...(canEdit ? { propertiesPanel: { parent: '#js-properties-panel' } } : {}),
     });
     instanceRef.current = inst;
     setInstance(inst);
 
     if (canEdit) {
+      // Wire modeling/moddle into the provider BEFORE registering it.
+      setModelerServices(inst.get('modeling'), inst.get('moddle'));
       try {
         // eslint-disable-next-line no-new
         new JiraPropertiesProvider(inst.get('propertiesPanel'));
       } catch (e) {
-        console.error('Properties panel not available', e);
+        console.error('Properties panel not available; install bpmn-js-properties-panel', e);
       }
     }
 
@@ -181,14 +176,13 @@ export default function BpmnDiagramView({ diagramXml, canEdit, onSave, onDirtyCh
   const handlePlayPause = () => {
     if (!instanceRef.current) return;
     const ts = instanceRef.current.get('tokenSimulation');
-    if (tokenSimRunning) ts.pause();
-    else ts.play();
+    if (tokenSimRunning) ts.pause(); else ts.play();
   };
-  const handleResetSim = () => instanceRef.current?.get('tokenSimulation').reset();
+  const handleResetSim = () => instanceRef.current?.get('tokenSimulation')?.reset();
 
   return (
     <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-      <div style={{ flex: '1 1 480px', minWidth: 0 }}>
+      <div style={{ flex: '1 1 520px', minWidth: 0 }}>
         {canEdit && (
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap' }}>
             <button onClick={handleSave} data-testid="save-bpmn">Save Diagram</button>
@@ -224,13 +218,8 @@ export default function BpmnDiagramView({ diagramXml, canEdit, onSave, onDirtyCh
           id="js-properties-panel"
           data-testid="bpmn-properties-panel"
           style={{
-            width: PANEL_WIDTH,
-            flex: '0 0 auto',
-            border: '1px solid #ddd',
-            borderRadius: '4px',
-            background: '#fff',
-            maxHeight: CANVAS_HEIGHT,
-            overflowY: 'auto',
+            width: PANEL_WIDTH, flexShrink: 0, border: '1px solid #ddd',
+            borderRadius: '4px', background: '#fff', maxHeight: CANVAS_HEIGHT, overflowY: 'auto',
           }}
         />
       ) : (

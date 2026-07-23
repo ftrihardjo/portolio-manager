@@ -557,6 +557,7 @@ export default function App() {
         xml,
       });
       setSelectedDiagramId(diagram.id);
+      setSelectedDiagramXml(xml);
       setSrAnnouncement(`Saved diagram ${diagram.name}`);
       await loadBpmnDiagrams();
     } catch (e) {
