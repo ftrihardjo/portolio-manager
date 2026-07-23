@@ -1,7 +1,7 @@
 import Resolver from '@forge/resolver';
 import api, { route } from '@forge/api';
 import { kvs } from '@forge/kvs';
-import { emit } from '@forge/events';
+import { emit } from '@forge/realtime';
 
 const resolver = new Resolver();
 
@@ -239,20 +239,6 @@ resolver.define('getRoadmapEpics', async ({ payload }) => {
 const BPMN_INDEX_KEY = 'bpmn:index';
 const bpmnDiagramKey = (id) => `bpmn:diagram:${id}`;
 
-const EMPTY_BPMN_XML = `<?xml version="1.0" encoding="UTF-8"?>
-<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn">
-  <bpmn:process id="Process_1" isExecutable="false">
-    <bpmn:startEvent id="StartEvent_1" />
-  </bpmn:process>
-  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
-    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Process_1">
-      <bpmndi:BPMNShape id="StartEvent_1_di" bpmnElement="StartEvent_1">
-        <dc:Bounds x="152" y="102" width="36" height="36" />
-      </bpmndi:BPMNShape>
-    </bpmndi:BPMNPlane>
-  </bpmndi:BPMNDiagram>
-</bpmn:definitions>`;
-
 // Looks up a project's lead accountId directly from Jira (not from
 // whatever the client sent), so permission checks can't be spoofed by a
 // crafted payload.
@@ -280,16 +266,14 @@ resolver.define('getBpmnDiagram', async ({ payload }) => {
 resolver.define('saveBpmnDiagram', async ({ payload, context }) => {
   const { diagramId, name, projectKey, xml } = payload;
   const accountId = context?.accountId ?? null;
-
   const leadAccountId = await getProjectLeadAccountId(projectKey);
   if (!accountId || accountId !== leadAccountId) {
     throw new Error('Only the project lead can edit this diagram.');
   }
-
   const id = diagramId || `bpmn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const now = new Date().toISOString();
-
   const existing = diagramId ? await kvs.get(bpmnDiagramKey(id)) : null;
+  const version = (existing?.version || 0) + 1;
   const record = {
     id,
     name,
@@ -297,15 +281,18 @@ resolver.define('saveBpmnDiagram', async ({ payload, context }) => {
     xml,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
+    version,
   };
   await kvs.set(bpmnDiagramKey(id), record);
-
   const index = (await kvs.get(BPMN_INDEX_KEY)) || [];
-  const meta = { id, name, projectKey, updatedAt: now };
+  const meta = { id, name, projectKey, updatedAt: now, lastEditedBy: accountId, version };
   const nextIndex = diagramId
     ? index.map(d => (d.id === id ? meta : d))
     : [...index, meta];
   await kvs.set(BPMN_INDEX_KEY, nextIndex);
+
+  // Emit event so frontend polling/listeners can react
+  await emit('diagram-updated', { diagramId: id, version });
 
   return record;
 });
@@ -327,54 +314,6 @@ resolver.define('deleteBpmnDiagram', async ({ payload, context }) => {
   await kvs.set(BPMN_INDEX_KEY, index.filter(d => d.id !== diagramId));
 
   return { deleted: true };
-});
-
-resolver.define('saveBpmnDiagram', async ({ payload, context }) => {
-  const { diagramId, name, projectKey, xml } = payload;
-  const accountId = context?.accountId ?? null;
-  const leadAccountId = await getProjectLeadAccountId(projectKey);
-
-  if (!accountId || accountId !== leadAccountId) {
-    throw new Error('Only the project lead can edit this diagram.');
-  }
-
-  const id = diagramId || `bpmn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const now = new Date().toISOString();
-  const existing = diagramId ? await kvs.get(bpmnDiagramKey(id)) : null;
-
-  // ✅ Calculate version properly
-  const version = (existing?.version || 0) + 1;
-
-  const record = {
-    id,
-    name,
-    projectKey,
-    xml,
-    createdAt: existing?.createdAt ?? now,
-    updatedAt: now,
-    version,
-  };
-
-  await kvs.set(bpmnDiagramKey(id), record);
-
-  const index = (await kvs.get(BPMN_INDEX_KEY)) || [];
-  const meta = { id, name, projectKey, updatedAt: now, lastEditedBy: accountId, version };
-  const nextIndex = diagramId
-    ? index.map(d => (d.id === id ? meta : d))
-    : [...index, meta];
-
-  await kvs.set(BPMN_INDEX_KEY, nextIndex);
-
-  // ✅ Emit the event INSIDE the resolver after a successful save
-  await emit('bpmn:diagram:saved', {
-    diagramId: id,
-    projectKey,
-    lastEditedBy: accountId,
-    updatedAt: now,
-    version,
-  });
-
-  return record;
 });
 
 // Backend: add locking

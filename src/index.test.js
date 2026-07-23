@@ -29,7 +29,7 @@ jest.mock('@forge/kvs', () => ({
   },
 }));
 
-jest.mock('@forge/events', () => ({
+jest.mock('@forge/realtime', () => ({
   emit: jest.fn().mockResolvedValue(undefined),
 }));
 
@@ -451,8 +451,7 @@ describe('BPMN diagrams (getCurrentUser, getBpmnDiagrams, getBpmnDiagram, saveBp
     expect(result.createdAt).toBe(result.updatedAt);
 
     const index = await getResolver('getBpmnDiagrams')({});
-    expect(index).toEqual([{ id: result.id, name: 'Order Process', projectKey: 'TEST', updatedAt: result.updatedAt }]);
-  });
+    expect(index).toEqual([{ id: result.id, name: 'Order Process', projectKey: 'TEST', updatedAt: result.updatedAt, lastEditedBy: 'lead-acc-1', version: 1 }]);  });
 
   it('rejects a save from anyone who is not the project lead', async () => {
     mockProjectLead('TEST', LEAD_ACCOUNT_ID);

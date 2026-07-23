@@ -18,6 +18,7 @@
   "dependencies": {
     "@forge/events": "^3.0.2",
     "@forge/kvs": "^2.0.1",
+    "@forge/realtime": "^1.0.0",
     "@forge/resolver": "1.8.0"
   },
   "overrides": {
