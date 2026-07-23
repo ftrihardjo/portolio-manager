@@ -1,6 +1,7 @@
 import Resolver from '@forge/resolver';
 import api, { route } from '@forge/api';
 import { kvs } from '@forge/kvs';
+import { emit } from '@forge/events';
 
 const resolver = new Resolver();
 
@@ -326,6 +327,89 @@ resolver.define('deleteBpmnDiagram', async ({ payload, context }) => {
   await kvs.set(BPMN_INDEX_KEY, index.filter(d => d.id !== diagramId));
 
   return { deleted: true };
+});
+
+resolver.define('saveBpmnDiagram', async ({ payload, context }) => {
+  const { diagramId, name, projectKey, xml } = payload;
+  const accountId = context?.accountId ?? null;
+  const leadAccountId = await getProjectLeadAccountId(projectKey);
+
+  if (!accountId || accountId !== leadAccountId) {
+    throw new Error('Only the project lead can edit this diagram.');
+  }
+
+  const id = diagramId || `bpmn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const now = new Date().toISOString();
+  const existing = diagramId ? await kvs.get(bpmnDiagramKey(id)) : null;
+
+  // ✅ Calculate version properly
+  const version = (existing?.version || 0) + 1;
+
+  const record = {
+    id,
+    name,
+    projectKey,
+    xml,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+    version,
+  };
+
+  await kvs.set(bpmnDiagramKey(id), record);
+
+  const index = (await kvs.get(BPMN_INDEX_KEY)) || [];
+  const meta = { id, name, projectKey, updatedAt: now, lastEditedBy: accountId, version };
+  const nextIndex = diagramId
+    ? index.map(d => (d.id === id ? meta : d))
+    : [...index, meta];
+
+  await kvs.set(BPMN_INDEX_KEY, nextIndex);
+
+  // ✅ Emit the event INSIDE the resolver after a successful save
+  await emit('bpmn:diagram:saved', {
+    diagramId: id,
+    projectKey,
+    lastEditedBy: accountId,
+    updatedAt: now,
+    version,
+  });
+
+  return record;
+});
+
+// Backend: add locking
+resolver.define('lockDiagram', async ({ payload, context }) => {
+  const { diagramId } = payload;
+  const accountId = context?.accountId;
+  const lockKey = `bpmn:lock:${diagramId}`;
+  const existingLock = await kvs.get(lockKey);
+
+  if (existingLock && existingLock.accountId !== accountId) {
+    // Check if lock is stale (older than 5 minutes)
+    const lockAge = Date.now() - new Date(existingLock.lockedAt).getTime();
+    if (lockAge < 5 * 60 * 1000) {
+      return { locked: true, lockedBy: existingLock.accountId };
+    }
+  }
+
+  await kvs.set(lockKey, {
+    diagramId,
+    accountId,
+    lockedAt: new Date().toISOString(),
+  });
+  return { locked: false };
+});
+
+resolver.define('unlockDiagram', async ({ payload, context }) => {
+  const { diagramId } = payload;
+  const accountId = context?.accountId;
+  const lockKey = `bpmn:lock:${diagramId}`;
+  const existingLock = await kvs.get(lockKey);
+
+  if (existingLock?.accountId === accountId) {
+    await kvs.delete(lockKey);
+  }
+  return { unlocked: true };
 });
 
 export const handler = resolver.getDefinitions();
