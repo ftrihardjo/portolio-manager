@@ -381,34 +381,6 @@ export default function App() {
   // Collaborative editing via polling (Forge has no push channel). We poll the
   // cheap index; on a version change we either auto-reload (no local edits) or
   // raise a conflict banner (local edits present) so work is never lost.
-  useEffect(() => {
-    if (activeTab !== 'bpmn' || !selectedDiagramId || !canEditDiagram) return undefined;
-    const id = selectedDiagramId;
-
-    const applyRemote = async () => {
-      try {
-        const full = await invokeWithRetry('getBpmnDiagram', { diagramId: id });
-        setSelectedDiagramXml(full.xml);          // prop change -> view re-imports
-        bpmnVersionRef.current = full.version ?? null;
-        setBpmnDirty(false);
-        setBpmnConflict(null);
-      } catch (e) { /* ignore transient poll errors */ }
-    };
-
-    const tick = async () => {
-      try {
-        const index = await invokeWithRetry('getBpmnDiagrams', {});
-        const meta = (index || []).find((d) => d.id === id);
-        if (!meta || meta.version == null) return;
-        if (meta.version === bpmnVersionRef.current) return;     // no change
-        if (!bpmnDirtyRef.current) await applyRemote();          // safe to take it
-        else setBpmnConflict(meta);                              // don't clobber local work
-      } catch (e) { /* ignore */ }
-    };
-
-    const interval = setInterval(tick, 8000);
-    return () => clearInterval(interval);
-  }, [activeTab, selectedDiagramId, canEditDiagram]);
 
   // "Reload" in the conflict banner: take the remote version even if dirty.
   const reloadBpmnFromServer = async () => {
@@ -980,7 +952,34 @@ export default function App() {
     newDiagramNameTrimmed === '' ||
     bpmnDiagrams.some((d) => (d.name || '').toLowerCase() === newDiagramNameTrimmed.toLowerCase())
   );
+  useEffect(() => {
+    if (activeTab !== 'bpmn' || !selectedDiagramId || !canEditDiagram) return undefined;
+    const id = selectedDiagramId;
 
+    const applyRemote = async () => {
+      try {
+        const full = await invokeWithRetry('getBpmnDiagram', { diagramId: id });
+        setSelectedDiagramXml(full.xml);          // prop change -> view re-imports
+        bpmnVersionRef.current = full.version ?? null;
+        setBpmnDirty(false);
+        setBpmnConflict(null);
+      } catch (e) { /* ignore transient poll errors */ }
+    };
+
+    const tick = async () => {
+      try {
+        const index = await invokeWithRetry('getBpmnDiagrams', {});
+        const meta = (index || []).find((d) => d.id === id);
+        if (!meta || meta.version == null) return;
+        if (meta.version === bpmnVersionRef.current) return;     // no change
+        if (!bpmnDirtyRef.current) await applyRemote();          // safe to take it
+        else setBpmnConflict(meta);                              // don't clobber local work
+      } catch (e) { /* ignore */ }
+    };
+
+    const interval = setInterval(tick, 8000);
+    return () => clearInterval(interval);
+  }, [activeTab, selectedDiagramId, canEditDiagram]);
   // Filter the left-hand diagram library by name.
   const filteredBpmnDiagrams = useMemo(() => {
     const q = diagramSearch.trim().toLowerCase();

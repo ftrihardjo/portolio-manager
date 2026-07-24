@@ -11,7 +11,7 @@ modules:
       resource: portfolio-ui
       resolver:
         function: resolver
-      title: BPMN Portfolio Manager
+      title: BPMN & Portfolio Manager
       layout: basic
   function:
     - key: resolver
