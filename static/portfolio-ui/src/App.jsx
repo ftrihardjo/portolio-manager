@@ -969,6 +969,10 @@ export default function App() {
     const project = projects.find(p => p.key === projectKey);
     return !!project && project.leadAccountId === currentUserAccountId;
   }, [selectedDiagramId, bpmnDiagrams, newDiagramProjectKey, projects, currentUserAccountId]);
+  const openDiagramMeta = useMemo(
+    () => (selectedDiagramId ? bpmnDiagrams.find((d) => d.id === selectedDiagramId) : null),
+    [selectedDiagramId, bpmnDiagrams]
+  );
   // A new diagram may only be saved with a non-empty name that doesn't
   // duplicate an existing diagram's name (case-insensitive).
   const newDiagramNameTrimmed = newDiagramName.trim();
@@ -1923,6 +1927,11 @@ export default function App() {
                           onSave={saveBpmnDiagram}
                           onDirtyChange={setBpmnDirty}
                           saveDisabled={newDiagramNameInvalid}
+                          modelName={selectedDiagramId ? (openDiagramMeta?.name || '') : (newDiagramName.trim() || 'New diagram')}
+                          modelVersion={openDiagramMeta?.version}
+                          modelLastEditedBy={openDiagramMeta?.lastEditedBy}
+                          modelLastEditedAt={openDiagramMeta?.updatedAt}
+                          currentAccountId={currentUserAccountId}
                         />
                       </ErrorBoundary>
                     </>
