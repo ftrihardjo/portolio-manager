@@ -57,18 +57,17 @@ function setLinkedResourceProperty(modeling, moddle, element, name, value) {
       modeling.updateProperties(element, { extensionElements: extEls });
     }
   }
-  modeling.updateModdleProperties(element, ext, {
-    [name]: value === '' ? undefined : value,
-  });
+  modeling.updateModdleProperties(element, ext, { [name]: value === '' ? undefined : value });
 }
 
 // Editable group (Modeler). Pulls modeling/moddle from the panel's DI so the
 // write actually flows into the XML — the previous version had no handle on
 // the modeler, so edits never persisted.
 function LinkedResourcesGroup({ element }) {
-  const modeling = useService('modeling');
-  const moddle = useService('moddle');
-  const ext = getLinkedResources(getBusinessObject(element)) || {};
+  const modeling = useService('modeling');   // valid: rendered in the panel's Preact DI context
+  const moddle  = useService('moddle');
+  const bo = getBusinessObject(element);
+  const ext = getLinkedResources(bo) || {};
   const issueKey = ext.issueKey || '';
   const confluencePage = ext.confluencePage || '';
   const documentation = ext.documentation || '';
