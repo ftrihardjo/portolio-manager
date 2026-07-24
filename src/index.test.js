@@ -29,10 +29,6 @@ jest.mock('@forge/kvs', () => ({
   },
 }));
 
-jest.mock('@forge/realtime', () => ({
-  emit: jest.fn().mockResolvedValue(undefined),
-}));
-
 import { handler } from './index';
 import api, { route } from '@forge/api';
 import { kvs } from '@forge/kvs';

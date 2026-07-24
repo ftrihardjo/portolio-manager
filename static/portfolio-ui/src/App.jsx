@@ -374,22 +374,69 @@ export default function App() {
   const [dateFilter, setDateFilter] = useState({ start: '', end: '' });
   const [statusFilter, setStatusFilter] = useState('');
   const [leadSearch, setLeadSearch] = useState('');
+  const [bpmnConflict, setBpmnConflict] = useState(null);   // { version, lastEditedBy, updatedAt }
+  const bpmnVersionRef = useRef(null);                      // version we currently hold
+  const bpmnDirtyRef = useRef(false);
+  useEffect(() => { bpmnDirtyRef.current = bpmnDirty; }, [bpmnDirty]);
+  // Collaborative editing via polling (Forge has no push channel). We poll the
+  // cheap index; on a version change we either auto-reload (no local edits) or
+  // raise a conflict banner (local edits present) so work is never lost.
+  useEffect(() => {
+    if (activeTab !== 'bpmn' || !selectedDiagramId || !canEditDiagram) return undefined;
+    const id = selectedDiagramId;
+
+    const applyRemote = async () => {
+      try {
+        const full = await invokeWithRetry('getBpmnDiagram', { diagramId: id });
+        setSelectedDiagramXml(full.xml);          // prop change -> view re-imports
+        bpmnVersionRef.current = full.version ?? null;
+        setBpmnDirty(false);
+        setBpmnConflict(null);
+      } catch (e) { /* ignore transient poll errors */ }
+    };
+
+    const tick = async () => {
+      try {
+        const index = await invokeWithRetry('getBpmnDiagrams', {});
+        const meta = (index || []).find((d) => d.id === id);
+        if (!meta || meta.version == null) return;
+        if (meta.version === bpmnVersionRef.current) return;     // no change
+        if (!bpmnDirtyRef.current) await applyRemote();          // safe to take it
+        else setBpmnConflict(meta);                              // don't clobber local work
+      } catch (e) { /* ignore */ }
+    };
+
+    const interval = setInterval(tick, 8000);
+    return () => clearInterval(interval);
+  }, [activeTab, selectedDiagramId, canEditDiagram]);
+
+  // "Reload" in the conflict banner: take the remote version even if dirty.
+  const reloadBpmnFromServer = async () => {
+    if (!selectedDiagramId) return;
+    try {
+      const full = await invokeWithRetry('getBpmnDiagram', { diagramId: selectedDiagramId });
+      setSelectedDiagramXml(full.xml);
+      bpmnVersionRef.current = full.version ?? null;
+      setBpmnDirty(false);
+      setBpmnConflict(null);
+    } catch (e) { setError('Failed to reload diagram: ' + e.message); }
+  };
 
   // ✅ Track tab switches automatically
-    useEffect(() => {
-      ReactGA.send({
-        hitType: 'pageview',
-        page: `/portfolio-manager/${activeTab}`,
-        title: `Portfolio Manager - ${activeTab}`
-      });
+  useEffect(() => {
+    ReactGA.send({
+      hitType: 'pageview',
+      page: `/portfolio-manager/${activeTab}`,
+      title: `Portfolio Manager - ${activeTab}`
+    });
 
-      // Also send a custom event for more detailed tracking
-      ReactGA.event({
-        category: 'Navigation',
-        action: 'Tab Switched',
-        label: activeTab,
-      });
-    }, [activeTab]);
+    // Also send a custom event for more detailed tracking
+    ReactGA.event({
+      category: 'Navigation',
+      action: 'Tab Switched',
+      label: activeTab,
+    });
+  }, [activeTab]);
 
   // Debounce search query
   useEffect(() => {
@@ -523,58 +570,45 @@ export default function App() {
   }
 
   async function openBpmnDiagram(diagramId) {
-    setLoading(true);
-    setError(null);
+    setLoading(true); setError(null);
     try {
       const diagram = await invokeWithRetry('getBpmnDiagram', { diagramId });
       setSelectedDiagramId(diagram.id);
       setSelectedDiagramXml(diagram.xml);
       setBpmnDirty(false);
-    } catch (e) {
-      setError('Failed to open diagram: ' + e.message);
-    } finally {
-      setLoading(false);
-    }
+      bpmnVersionRef.current = diagram.version ?? null;   // +
+      setBpmnConflict(null);                              // +
+    } catch (e) { setError('Failed to open diagram: ' + e.message); }
+    finally { setLoading(false); }
   }
 
   function startNewBpmnDiagram() {
-    setSelectedDiagramId(null);
-    setSelectedDiagramXml(null);
-    setBpmnDirty(false);
-    setNewDiagramName('');
-    setNewDiagramProjectKey(projects[0]?.key || '');
+    setSelectedDiagramId(null); setSelectedDiagramXml(null); setBpmnDirty(false);
+    setNewDiagramName(''); setNewDiagramProjectKey(projects[0]?.key || '');
+    bpmnVersionRef.current = null;   // +
+    setBpmnConflict(null);           // +
   }
 
   async function saveBpmnDiagram(xml) {
-    const isNew = selectedDiagramId === null;
-    const intendedName = isNew
-      ? newDiagramName.trim()
-      : (bpmnDiagrams.find((d) => d.id === selectedDiagramId)?.name || '').trim();
-
-    if (!intendedName) {
-      setError('Please enter a diagram name before saving.');
-      return;
-    }
-    if (isNew && bpmnDiagrams.some((d) => (d.name || '').toLowerCase() === intendedName.toLowerCase())) {
-      setError(`A diagram named "${intendedName}" already exists. Choose a unique name.`);
-      return;
-    }
-
     try {
       const diagram = await invokeWithRetry('saveBpmnDiagram', {
         diagramId: selectedDiagramId,
-        name: intendedName,
+        name: selectedDiagramId
+          ? bpmnDiagrams.find((d) => d.id === selectedDiagramId)?.name
+          : newDiagramName,
         projectKey: selectedDiagramId
           ? bpmnDiagrams.find((d) => d.id === selectedDiagramId)?.projectKey
           : newDiagramProjectKey,
         xml,
+        baseVersion: bpmnVersionRef.current,            // + server rejects if stale
       });
       setSelectedDiagramId(diagram.id);
-      setNewDiagramName('');
+      bpmnVersionRef.current = diagram.version ?? null; // +
+      setBpmnConflict(null);                            // +
       setSrAnnouncement(`Saved diagram ${diagram.name}`);
       await loadBpmnDiagrams();
     } catch (e) {
-      setError('Failed to save diagram: ' + e.message);
+      setError('Failed to save diagram: ' + e.message); // conflict message surfaces here too
     }
   }
 
@@ -1863,6 +1897,23 @@ export default function App() {
                         <p style={{ fontSize: '12px', color: '#666' }}>
                           View only — only this project's lead can edit this diagram.
                         </p>
+                      )}
+                      {bpmnConflict && (
+                        <div role="alert" style={{
+                          display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
+                          background: '#fff3cd', border: '1px solid #ffc107', borderRadius: 4,
+                          padding: '8px 12px', marginBottom: 8, fontSize: 12,
+                        }}>
+                          <span>
+                            This diagram was updated by {bpmnConflict.lastEditedBy || 'another user'}
+                            {' '}at {new Date(bpmnConflict.updatedAt).toLocaleTimeString()}.
+                            Your unsaved changes would be overwritten by a reload.
+                          </span>
+                          <span style={{ display: 'flex', gap: 6 }}>
+                            <button onClick={reloadBpmnFromServer} style={{ fontSize: 11 }}>Reload remote</button>
+                            <button onClick={() => setBpmnConflict(null)} style={{ fontSize: 11, background: 'none', border: 'none', cursor: 'pointer' }}>Keep mine</button>
+                          </span>
+                        </div>
                       )}
                       <ErrorBoundary key={selectedDiagramId || 'new'}>
                         <BpmnDiagramView

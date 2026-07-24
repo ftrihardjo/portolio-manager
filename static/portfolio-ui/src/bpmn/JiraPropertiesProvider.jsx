@@ -4,166 +4,166 @@ import {
   TextAreaEntry,
   TextFieldEntry,
 } from '@bpmn-io/properties-panel';
+// useService resolves against the modeler's injector that the properties
+// panel is mounted into — this is the documented way for a group/entry to
+// reach modeling/moddle. (Importing it from '@bpmn-io/properties-panel'
+// yields undefined; it must come from 'bpmn-js-properties-panel'.)
+import { useService } from 'bpmn-js-properties-panel';
 import { getBusinessObject } from 'bpmn-js/lib/util/ModelUtil';
 
 export const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9]+-\d+$/;
 
-// --- modeling/moddle bridge ----------------------------------------------
-// The properties panel renders our custom group/entries with Preact and does
-// NOT hand us the modeler, and `useService` is not reliably importable in
-// this project's dependency tree. So we capture modeling + moddle once (from
-// the modeler instance, in BpmnDiagramView) into module scope and read them
-// back here. Safe because only one editor is mounted at a time.
-let _modeling = null;
-let _moddle = null;
-export function setModelerServices(modeling, moddle) {
-  _modeling = modeling;
-  _moddle = moddle;
-}
+const shellStyle = { padding: '10px 12px', borderBottom: '1px solid #eee' };
+const headStyle = { fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px', color: '#42526e' };
+const btnStyle = { fontSize: '11px', padding: '4px 8px' };
 
-// --- plain reader (used by BOTH the editable entries and the React viewer) -
-export function getLinkedResources(businessObject) {
-  if (!businessObject || typeof businessObject.get !== 'function') {
-    return { issueKey: '', confluencePage: '', documentation: '' };
-  }
-  const extElements = businessObject.get('extensionElements');
-  const values = (extElements && extElements.get && extElements.get('values')) || [];
-  const ext = values.find((v) => v.$type === 'jira:LinkedResources');
-  return {
-    issueKey: ext?.issueKey || '',
-    confluencePage: ext?.confluencePage || '',
-    documentation: ext?.documentation || '',
-  };
-}
-
-function setLinkedResourceProperty(element, propertyName, value) {
-  if (!_modeling || !_moddle) return; // editor not wired yet → no-op
-  const bo = getBusinessObject(element);
-  let ext = getLinkedResources(bo) && _findExt(bo);
-  let extElements = bo.get('extensionElements');
-  if (!ext) {
-    ext = _moddle.create('jira:LinkedResources');
-    if (extElements) {
-      _modeling.updateModdleProperties(element, extElements, {
-        values: [...(extElements.get('values') || []), ext],
-      });
-    } else {
-      extElements = _moddle.create('bpmn:ExtensionElements', { values: [ext] });
-      _modeling.updateProperties(element, { extensionElements: extElements });
-    }
-  }
-  _modeling.updateModdleProperties(element, ext, {
-    [propertyName]: value === '' ? undefined : value,
-  });
-}
-function _findExt(bo) {
-  const extElements = bo.get('extensionElements');
-  const values = (extElements && extElements.get && extElements.get('values')) || [];
-  return values.find((v) => v.$type === 'jira:LinkedResources') || null;
-}
-
-// --- per-field debounce (stable per id, no hooks needed) -----------------
+// Stable per-field debounce. The entries expect a *function*
+// (fn) => debouncedFn — passing a number (e.g. 300) silently breaks them.
 const _debounceCache = {};
 function debounceFor(id) {
   if (!_debounceCache[id]) {
-    let timer;
+    let t;
     _debounceCache[id] = (fn) => (...args) => {
-      clearTimeout(timer);
-      timer = setTimeout(() => fn(...args), 300);
+      clearTimeout(t);
+      t = setTimeout(() => fn(...args), 300);
     };
   }
   return _debounceCache[id];
 }
 
-// --- defensive wrappers: a property-panel quirk must NEVER crash the canvas
-function safeText(props) { try { return TextFieldEntry(props); } catch (e) { return null; } }
-function safeArea(props) { try { return TextAreaEntry(props); } catch (e) { return null; } }
+// Read the (at most one) jira:LinkedResources extension. Exported because
+// the Viewer's read-only panel and the editor both need it.
+export function getLinkedResources(bo) {
+  if (!bo || typeof bo.get !== 'function') return null;
+  const ext = bo.get('extensionElements');
+  const values = (ext && typeof ext.get === 'function' ? ext.get('values') : null) || [];
+  return values.find((v) => v.$type === 'jira:LinkedResources') || null;
+}
 
-function OpenButtonsEntry(props) {
-  try {
-    const element = props.element;
-    if (!element) return null;
-    const { issueKey, confluencePage } = getLinkedResources(getBusinessObject(element));
-    return h('div', { style: { display: 'flex', gap: '6px', padding: '4px 0' } },
+// Create the extension + its extensionElements wrapper if missing, then
+// write one property. Empty string clears it (otherwise "" persists forever).
+function setLinkedResourceProperty(modeling, moddle, element, name, value) {
+  const bo = getBusinessObject(element);
+  let ext = getLinkedResources(bo);
+  let extEls = bo.get('extensionElements');
+  if (!ext) {
+    ext = moddle.create('jira:LinkedResources');
+    if (extEls) {
+      modeling.updateModdleProperties(element, extEls, {
+        values: [...(extEls.get('values') || []), ext],
+      });
+    } else {
+      extEls = moddle.create('bpmn:ExtensionElements', { values: [ext] });
+      modeling.updateProperties(element, { extensionElements: extEls });
+    }
+  }
+  modeling.updateModdleProperties(element, ext, {
+    [name]: value === '' ? undefined : value,
+  });
+}
+
+// Editable group (Modeler). Pulls modeling/moddle from the panel's DI so the
+// write actually flows into the XML — the previous version had no handle on
+// the modeler, so edits never persisted.
+function LinkedResourcesGroup({ element }) {
+  const modeling = useService('modeling');
+  const moddle = useService('moddle');
+  const ext = getLinkedResources(getBusinessObject(element)) || {};
+  const issueKey = ext.issueKey || '';
+  const confluencePage = ext.confluencePage || '';
+  const documentation = ext.documentation || '';
+  const set = (n, v) => setLinkedResourceProperty(modeling, moddle, element, n, v);
+
+  return h('div', { style: shellStyle },
+    h('h3', { style: headStyle }, 'Linked Resources'),
+    h('div', { style: { display: 'flex', gap: '6px', marginBottom: '10px' } },
       h('button', {
         type: 'button',
         onClick: () => { if (ISSUE_KEY_PATTERN.test(issueKey)) window.__openIssueInJira?.(issueKey); },
         disabled: !ISSUE_KEY_PATTERN.test(issueKey),
-        style: { fontSize: '11px', padding: '4px 8px' },
+        style: btnStyle,
+        title: ISSUE_KEY_PATTERN.test(issueKey) ? `Open ${issueKey} in Jira` : 'Enter a valid issue key first (e.g. PROJ-123)',
       }, 'Open in Jira'),
       h('button', {
         type: 'button',
         onClick: () => { if (confluencePage) window.__routerOpen?.(confluencePage); },
         disabled: !confluencePage,
-        style: { fontSize: '11px', padding: '4px 8px' },
+        style: btnStyle,
+        title: confluencePage ? 'Open the linked Confluence page' : 'Enter a Confluence page URL first',
       }, 'Open in Confluence'),
-    );
-  } catch (e) { return null; }
-}
-
-function IssueKeyEntry(props) {
-  try {
-    const element = props.element;
-    if (!element) return null;
-    const { issueKey } = getLinkedResources(getBusinessObject(element));
-    return safeText({
-      element, id: 'jiraIssueKey', label: 'Issue Key', description: 'PROJ-123',
+    ),
+    h(TextFieldEntry, {
+      id: 'jiraIssueKey', element, label: 'Issue Key', description: 'PROJ-123',
       getValue: () => issueKey,
-      setValue: (v) => setLinkedResourceProperty(element, 'issueKey', v),
+      setValue: (v) => set('issueKey', v),
       validate: (v) => (v && !ISSUE_KEY_PATTERN.test(v)) ? 'Must look like PROJ-123' : undefined,
       debounce: debounceFor('jiraIssueKey'),
-    });
-  } catch (e) { return null; }
-}
-
-function ConfluenceEntry(props) {
-  try {
-    const element = props.element;
-    if (!element) return null;
-    const { confluencePage } = getLinkedResources(getBusinessObject(element));
-    return safeText({
-      element, id: 'jiraConfluencePage', label: 'Confluence URL',
+    }),
+    h(TextFieldEntry, {
+      id: 'jiraConfluencePage', element, label: 'Confluence URL',
       getValue: () => confluencePage,
-      setValue: (v) => setLinkedResourceProperty(element, 'confluencePage', v),
+      setValue: (v) => set('confluencePage', v),
       debounce: debounceFor('jiraConfluencePage'),
-    });
-  } catch (e) { return null; }
-}
-
-function DocEntry(props) {
-  try {
-    const element = props.element;
-    if (!element) return null;
-    const { documentation } = getLinkedResources(getBusinessObject(element));
-    return safeArea({
-      element, id: 'jiraDocumentation', label: 'Documentation',
+    }),
+    h(TextAreaEntry, {
+      id: 'jiraDocumentation', element, label: 'Documentation',
       getValue: () => documentation,
-      setValue: (v) => setLinkedResourceProperty(element, 'documentation', v),
+      setValue: (v) => set('documentation', v),
       debounce: debounceFor('jiraDocumentation'),
-    });
-  } catch (e) { return null; }
+    }),
+  );
 }
 
-// Group factory — documented "entries" pattern.
-function LinkedResourcesGroup(element) {
-  return {
-    id: 'jira-linked-resources',
-    label: 'Linked Resources',
-    entries: [
-      { id: 'jiraOpenButtons', component: OpenButtonsEntry },
-      { id: 'jiraIssueKey', component: IssueKeyEntry, isEdited: isTextFieldEntryEdited },
-      { id: 'jiraConfluencePage', component: ConfluenceEntry, isEdited: isTextFieldEntryEdited },
-      { id: 'jiraDocumentation', component: DocEntry, isEdited: isTextFieldEntryEdited },
-    ],
-  };
+function Field({ label, value, link, multiline }) {
+  if (!value) return null;
+  return h('div', { style: { marginBottom: '6px' } },
+    h('div', { style: { fontSize: '11px', color: '#5e6c84', marginBottom: '2px' } }, label),
+    link
+      ? h('a', { href: value, target: '_blank', rel: 'noopener noreferrer', style: { fontSize: '12px', color: '#0052cc' } }, value)
+      : h('div', { style: { fontSize: '12px', whiteSpace: multiline ? 'pre-wrap' : 'normal' } }, value),
+  );
+}
+
+// Read-only group (Viewer). No modeling service exists there, so we render
+// the same data statically. Open-buttons still work via the window bridge.
+export function ReadOnlyLinkedResourcesGroup({ element }) {
+  const ext = getLinkedResources(getBusinessObject(element)) || {};
+  const issueKey = ext.issueKey || '';
+  const confluencePage = ext.confluencePage || '';
+  const documentation = ext.documentation || '';
+  return h('div', { style: shellStyle },
+    h('h3', { style: headStyle }, 'Linked Resources'),
+    h(Field, { label: 'Issue Key', value: issueKey }),
+    h(Field, { label: 'Confluence URL', value: confluencePage, link: true }),
+    h(Field, { label: 'Documentation', value: documentation, multiline: true }),
+    h('div', { style: { display: 'flex', gap: '6px', marginTop: '8px' } },
+      h('button', {
+        type: 'button',
+        onClick: () => { if (ISSUE_KEY_PATTERN.test(issueKey)) window.__openIssueInJira?.(issueKey); },
+        disabled: !ISSUE_KEY_PATTERN.test(issueKey), style: btnStyle,
+      }, 'Open in Jira'),
+      h('button', {
+        type: 'button',
+        onClick: () => { if (confluencePage) window.__routerOpen?.(confluencePage); },
+        disabled: !confluencePage, style: btnStyle,
+      }, 'Open in Confluence'),
+    ),
+  );
 }
 
 export default class JiraPropertiesProvider {
   constructor(propertiesPanel) {
-    propertiesPanel.registerProvider(500, this);
+    propertiesPanel.registerProvider(500, this); // after the default Id/Name groups
   }
   getGroups(element) {
     if (!element || element.type === 'label' || element.type === 'root') return [];
-    return (groups) => groups.concat([LinkedResourcesGroup(element)]);
+    return (groups) => {
+      groups.push({ id: 'jira-linked-resources', component: LinkedResourcesGroup, element });
+      return groups;
+    };
   }
 }
+
+// Kept imported so an unused-var lint doesn't fire; reserved for future
+// "copy issue key" affordances that need to know a field was edited.
+void isTextFieldEntryEdited;
