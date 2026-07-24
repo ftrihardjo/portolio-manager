@@ -367,6 +367,7 @@ export default function App() {
   const [bpmnDirty, setBpmnDirty] = useState(false);
   const [newDiagramName, setNewDiagramName] = useState('');
   const [newDiagramProjectKey, setNewDiagramProjectKey] = useState('');
+  const [diagramSearch, setDiagramSearch] = useState('');
   const [srAnnouncement, setSrAnnouncement] = useState('');
   const [sortBy, setSortBy] = useState('key');
   const [sortOrder, setSortOrder] = useState('asc');
@@ -545,19 +546,31 @@ export default function App() {
   }
 
   async function saveBpmnDiagram(xml) {
+    const isNew = selectedDiagramId === null;
+    const intendedName = isNew
+      ? newDiagramName.trim()
+      : (bpmnDiagrams.find((d) => d.id === selectedDiagramId)?.name || '').trim();
+
+    if (!intendedName) {
+      setError('Please enter a diagram name before saving.');
+      return;
+    }
+    if (isNew && bpmnDiagrams.some((d) => (d.name || '').toLowerCase() === intendedName.toLowerCase())) {
+      setError(`A diagram named "${intendedName}" already exists. Choose a unique name.`);
+      return;
+    }
+
     try {
       const diagram = await invokeWithRetry('saveBpmnDiagram', {
         diagramId: selectedDiagramId,
-        name: selectedDiagramId
-          ? bpmnDiagrams.find(d => d.id === selectedDiagramId)?.name
-          : newDiagramName,
+        name: intendedName,
         projectKey: selectedDiagramId
-          ? bpmnDiagrams.find(d => d.id === selectedDiagramId)?.projectKey
+          ? bpmnDiagrams.find((d) => d.id === selectedDiagramId)?.projectKey
           : newDiagramProjectKey,
         xml,
       });
       setSelectedDiagramId(diagram.id);
-      setSelectedDiagramXml(xml);
+      setNewDiagramName('');
       setSrAnnouncement(`Saved diagram ${diagram.name}`);
       await loadBpmnDiagrams();
     } catch (e) {
@@ -922,6 +935,20 @@ export default function App() {
     const project = projects.find(p => p.key === projectKey);
     return !!project && project.leadAccountId === currentUserAccountId;
   }, [selectedDiagramId, bpmnDiagrams, newDiagramProjectKey, projects, currentUserAccountId]);
+  // A new diagram may only be saved with a non-empty name that doesn't
+  // duplicate an existing diagram's name (case-insensitive).
+  const newDiagramNameTrimmed = newDiagramName.trim();
+  const newDiagramNameInvalid = selectedDiagramId === null && (
+    newDiagramNameTrimmed === '' ||
+    bpmnDiagrams.some((d) => (d.name || '').toLowerCase() === newDiagramNameTrimmed.toLowerCase())
+  );
+
+  // Filter the left-hand diagram library by name.
+  const filteredBpmnDiagrams = useMemo(() => {
+    const q = diagramSearch.trim().toLowerCase();
+    if (!q) return bpmnDiagrams;
+    return bpmnDiagrams.filter((d) => (d.name || '').toLowerCase().includes(q));
+  }, [bpmnDiagrams, diagramSearch]);
 
   // ── Portfolio Summary ────────────────────────────────────────────────
   // Deterministic, template-based text generation from data already in
@@ -1735,6 +1762,14 @@ export default function App() {
               <div style={{ padding: '0 20px', display: 'flex', gap: '20px' }}>
                 {/* Diagram library — left sidebar */}
                 <div style={{ width: '220px', flexShrink: 0 }}>
+                  <input
+                    type="text"
+                    placeholder="Search diagrams..."
+                    value={diagramSearch}
+                    onChange={(e) => setDiagramSearch(e.target.value)}
+                    data-testid="bpmn-diagram-search"
+                    style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', marginBottom: '8px' }}
+                  />
                   <button
                     onClick={startNewBpmnDiagram}
                     data-testid="new-bpmn-diagram"
@@ -1746,7 +1781,10 @@ export default function App() {
                     {bpmnDiagrams.length === 0 && (
                       <li style={{ color: '#666', fontSize: '13px' }}>No diagrams yet.</li>
                     )}
-                    {bpmnDiagrams.map(d => {
+                    {bpmnDiagrams.length > 0 && filteredBpmnDiagrams.length === 0 && (
+                      <li style={{ color: '#666', fontSize: '13px' }}>No diagrams match your search.</li>
+                    )}
+                    {filteredBpmnDiagrams.map(d => {
                       const project = projects.find(p => p.key === d.projectKey);
                       const isOwner = project?.leadAccountId === currentUserAccountId;
                       return (
@@ -1793,24 +1831,33 @@ export default function App() {
                   ) : (
                     <>
                       {selectedDiagramId === null && (
-                        <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
-                          <input
-                            type="text"
-                            placeholder="Diagram name"
-                            value={newDiagramName}
-                            onChange={(e) => setNewDiagramName(e.target.value)}
-                            data-testid="new-diagram-name"
-                          />
-                          <select
-                            value={newDiagramProjectKey}
-                            onChange={(e) => setNewDiagramProjectKey(e.target.value)}
-                            data-testid="new-diagram-project"
-                          >
-                            {projects.map(p => (
-                              <option key={p.key} value={p.key}>{p.name} ({p.key})</option>
-                            ))}
-                          </select>
-                        </div>
+                        <>
+                          <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+                            <input
+                              type="text"
+                              placeholder="Diagram name"
+                              value={newDiagramName}
+                              onChange={(e) => setNewDiagramName(e.target.value)}
+                              data-testid="new-diagram-name"
+                            />
+                            <select
+                              value={newDiagramProjectKey}
+                              onChange={(e) => setNewDiagramProjectKey(e.target.value)}
+                              data-testid="new-diagram-project"
+                            >
+                              {projects.map(p => (
+                                <option key={p.key} value={p.key}>{p.name} ({p.key})</option>
+                              ))}
+                            </select>
+                          </div>
+                          {newDiagramNameInvalid && (
+                            <p style={{ color: '#bf2600', fontSize: '12px', margin: '-4px 0 10px' }}>
+                              {newDiagramNameTrimmed === ''
+                                ? 'Enter a name to enable saving.'
+                                : 'A diagram with this name already exists.'}
+                            </p>
+                          )}
+                        </>
                       )}
                       {!canEditDiagram && (
                         <p style={{ fontSize: '12px', color: '#666' }}>
@@ -1824,6 +1871,7 @@ export default function App() {
                           canEdit={canEditDiagram}
                           onSave={saveBpmnDiagram}
                           onDirtyChange={setBpmnDirty}
+                          saveDisabled={newDiagramNameInvalid}
                         />
                       </ErrorBoundary>
                     </>
