@@ -326,7 +326,7 @@ button.btn-primary:active, .bpmn-tb-btn.primary:active { background: var(--ads-b
 /* Canvas + panels */
 .bpmn-canvas-col { display: flex; gap: 12px; flex-wrap: wrap; }
 .bpmn-canvas {
-  flex: 1 1 520px; min-width: 0;
+  flex: 1 1 480px; min-width: 0;
   height: clamp(520px, 70vh, 820px);
   background: var(--ads-surface);
   border: 1px solid var(--ads-border); border-radius: var(--r-md);
@@ -336,7 +336,7 @@ button.btn-primary:active, .bpmn-tb-btn.primary:active { background: var(--ads-b
   background-size: 16px 16px;
 }
 .bpmn-panel {
-  flex: 0 0 320px; width: 320px;
+  flex: 0 0 300px; width: 300px;
   background: var(--ads-surface);
   border: 1px solid var(--ads-border); border-radius: var(--r-md);
   box-shadow: var(--shadow-1);
@@ -344,11 +344,103 @@ button.btn-primary:active, .bpmn-tb-btn.primary:active { background: var(--ads-b
 }
 .bpmn-panel-empty { padding: 14px; color: var(--ads-text-muted); font-size: 12px; }
 
+/* Linked Resources Navigator — persistent left sidebar that lists every
+   BPMN element carrying a jira:LinkedResources extension. Stays visible
+   even when the bpmn-js Properties panel shifts focus (e.g. to the
+   Process element after token-simulation is enabled) so the End Event's
+   linked resources remain one click away. */
+.bpmn-navigator {
+  flex: 0 0 240px; width: 240px;
+  background: var(--ads-surface);
+  border: 1px solid var(--ads-border); border-radius: var(--r-md);
+  box-shadow: var(--shadow-1);
+  max-height: clamp(520px, 70vh, 820px);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.bpmn-nav-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px; border-bottom: 1px solid var(--ads-border);
+  background: var(--ads-surface-2);
+}
+.bpmn-nav-title {
+  margin: 0; font-size: 12px; font-weight: 700; letter-spacing: .02em;
+  text-transform: uppercase; color: var(--ads-text-sub);
+}
+.bpmn-nav-count {
+  font-size: 11px; font-weight: 700; color: #fff;
+  background: var(--ads-blue); border-radius: 999px;
+  padding: 1px 8px; min-width: 22px; text-align: center;
+}
+.bpmn-nav-search {
+  margin: 8px 10px 6px;
+  height: 28px; font-size: 12px;
+  background: var(--ads-surface-2);
+  border: 1px solid var(--ads-border); border-radius: var(--r-sm);
+  padding: 4px 8px; color: var(--ads-text);
+}
+.bpmn-nav-search:focus {
+  outline: none; border-color: var(--ads-blue);
+  box-shadow: 0 0 0 2px var(--ads-blue-subtle);
+}
+.bpmn-nav-list {
+  list-style: none; margin: 0; padding: 4px 6px 10px;
+  overflow-y: auto; flex: 1 1 auto;
+}
+.bpmn-nav-empty {
+  padding: 16px 10px; color: var(--ads-text-muted);
+  font-size: 12px; line-height: 1.5; text-align: center;
+}
+.bpmn-nav-item { margin: 0; }
+.bpmn-nav-item-btn {
+  display: block; width: 100%; text-align: left;
+  padding: 8px 10px; margin: 2px 0;
+  background: transparent; border: 1px solid transparent;
+  border-radius: var(--r-sm); cursor: pointer;
+  transition: background .12s, border-color .12s;
+}
+.bpmn-nav-item-btn:hover {
+  background: var(--ads-blue-faint);
+  border-color: var(--ads-blue-subtle);
+}
+.bpmn-nav-item-btn:focus-visible {
+  outline: 2px solid var(--ads-blue); outline-offset: 1px;
+}
+.bpmn-nav-item-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 6px; margin-bottom: 2px;
+}
+.bpmn-nav-item-name {
+  font-size: 13px; font-weight: 600; color: var(--ads-text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1 1 auto; min-width: 0;
+}
+.bpmn-nav-item-type {
+  font-size: 10px; font-weight: 600; color: var(--ads-text-muted);
+  text-transform: uppercase; letter-spacing: .03em;
+  flex: 0 0 auto;
+}
+.bpmn-nav-item-key { margin-top: 4px; }
+.bpmn-nav-item-key-pill {
+  display: inline-block;
+  font-size: 11px; font-weight: 600; color: var(--ads-blue);
+  background: var(--ads-blue-subtle); border-radius: 999px;
+  padding: 2px 8px; letter-spacing: .01em;
+}
+.bpmn-nav-item-meta {
+  margin-top: 4px; font-size: 11px; color: var(--ads-text-muted);
+}
+
 /* Tidy the bpmn-js palette / context-pad to match ADS corners */
 .bpmn-canvas .djs-palette,
 .bpmn-canvas .djs-context-pad { border-radius: var(--r-md); box-shadow: var(--shadow-2); }
 
+@media (max-width: 1100px) {
+  .bpmn-navigator { flex: 0 0 200px; width: 200px; }
+  .bpmn-panel { flex: 0 0 260px; width: 260px; }
+}
 @media (max-width: 900px) {
-  .bpmn-panel { flex: 1 1 100%; width: 100%; }
+  .bpmn-navigator, .bpmn-panel { flex: 1 1 100%; width: 100%; max-height: 320px; }
+  .bpmn-canvas { flex: 1 1 100%; min-height: 420px; }
   .app-content { padding: 16px; }
 }

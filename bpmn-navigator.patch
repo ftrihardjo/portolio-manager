@@ -1,0 +1,340 @@
+diff --git a/static/portfolio-ui/src/App.css b/static/portfolio-ui/src/App.css
+index be31825..dd758b1 100644
+--- a/static/portfolio-ui/src/App.css
++++ b/static/portfolio-ui/src/App.css
+@@ -326,7 +326,7 @@ button.btn-primary:active, .bpmn-tb-btn.primary:active { background: var(--ads-b
+ /* Canvas + panels */
+ .bpmn-canvas-col { display: flex; gap: 12px; flex-wrap: wrap; }
+ .bpmn-canvas {
+-  flex: 1 1 520px; min-width: 0;
++  flex: 1 1 480px; min-width: 0;
+   height: clamp(520px, 70vh, 820px);
+   background: var(--ads-surface);
+   border: 1px solid var(--ads-border); border-radius: var(--r-md);
+@@ -336,7 +336,7 @@ button.btn-primary:active, .bpmn-tb-btn.primary:active { background: var(--ads-b
+   background-size: 16px 16px;
+ }
+ .bpmn-panel {
+-  flex: 0 0 320px; width: 320px;
++  flex: 0 0 300px; width: 300px;
+   background: var(--ads-surface);
+   border: 1px solid var(--ads-border); border-radius: var(--r-md);
+   box-shadow: var(--shadow-1);
+@@ -344,11 +344,103 @@ button.btn-primary:active, .bpmn-tb-btn.primary:active { background: var(--ads-b
+ }
+ .bpmn-panel-empty { padding: 14px; color: var(--ads-text-muted); font-size: 12px; }
+ 
++/* Linked Resources Navigator — persistent left sidebar that lists every
++   BPMN element carrying a jira:LinkedResources extension. Stays visible
++   even when the bpmn-js Properties panel shifts focus (e.g. to the
++   Process element after token-simulation is enabled) so the End Event's
++   linked resources remain one click away. */
++.bpmn-navigator {
++  flex: 0 0 240px; width: 240px;
++  background: var(--ads-surface);
++  border: 1px solid var(--ads-border); border-radius: var(--r-md);
++  box-shadow: var(--shadow-1);
++  max-height: clamp(520px, 70vh, 820px);
++  display: flex; flex-direction: column;
++  overflow: hidden;
++}
++.bpmn-nav-header {
++  display: flex; align-items: center; justify-content: space-between;
++  padding: 10px 12px; border-bottom: 1px solid var(--ads-border);
++  background: var(--ads-surface-2);
++}
++.bpmn-nav-title {
++  margin: 0; font-size: 12px; font-weight: 700; letter-spacing: .02em;
++  text-transform: uppercase; color: var(--ads-text-sub);
++}
++.bpmn-nav-count {
++  font-size: 11px; font-weight: 700; color: #fff;
++  background: var(--ads-blue); border-radius: 999px;
++  padding: 1px 8px; min-width: 22px; text-align: center;
++}
++.bpmn-nav-search {
++  margin: 8px 10px 6px;
++  height: 28px; font-size: 12px;
++  background: var(--ads-surface-2);
++  border: 1px solid var(--ads-border); border-radius: var(--r-sm);
++  padding: 4px 8px; color: var(--ads-text);
++}
++.bpmn-nav-search:focus {
++  outline: none; border-color: var(--ads-blue);
++  box-shadow: 0 0 0 2px var(--ads-blue-subtle);
++}
++.bpmn-nav-list {
++  list-style: none; margin: 0; padding: 4px 6px 10px;
++  overflow-y: auto; flex: 1 1 auto;
++}
++.bpmn-nav-empty {
++  padding: 16px 10px; color: var(--ads-text-muted);
++  font-size: 12px; line-height: 1.5; text-align: center;
++}
++.bpmn-nav-item { margin: 0; }
++.bpmn-nav-item-btn {
++  display: block; width: 100%; text-align: left;
++  padding: 8px 10px; margin: 2px 0;
++  background: transparent; border: 1px solid transparent;
++  border-radius: var(--r-sm); cursor: pointer;
++  transition: background .12s, border-color .12s;
++}
++.bpmn-nav-item-btn:hover {
++  background: var(--ads-blue-faint);
++  border-color: var(--ads-blue-subtle);
++}
++.bpmn-nav-item-btn:focus-visible {
++  outline: 2px solid var(--ads-blue); outline-offset: 1px;
++}
++.bpmn-nav-item-row {
++  display: flex; align-items: center; justify-content: space-between;
++  gap: 6px; margin-bottom: 2px;
++}
++.bpmn-nav-item-name {
++  font-size: 13px; font-weight: 600; color: var(--ads-text);
++  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
++  flex: 1 1 auto; min-width: 0;
++}
++.bpmn-nav-item-type {
++  font-size: 10px; font-weight: 600; color: var(--ads-text-muted);
++  text-transform: uppercase; letter-spacing: .03em;
++  flex: 0 0 auto;
++}
++.bpmn-nav-item-key { margin-top: 4px; }
++.bpmn-nav-item-key-pill {
++  display: inline-block;
++  font-size: 11px; font-weight: 600; color: var(--ads-blue);
++  background: var(--ads-blue-subtle); border-radius: 999px;
++  padding: 2px 8px; letter-spacing: .01em;
++}
++.bpmn-nav-item-meta {
++  margin-top: 4px; font-size: 11px; color: var(--ads-text-muted);
++}
++
+ /* Tidy the bpmn-js palette / context-pad to match ADS corners */
+ .bpmn-canvas .djs-palette,
+ .bpmn-canvas .djs-context-pad { border-radius: var(--r-md); box-shadow: var(--shadow-2); }
+ 
++@media (max-width: 1100px) {
++  .bpmn-navigator { flex: 0 0 200px; width: 200px; }
++  .bpmn-panel { flex: 0 0 260px; width: 260px; }
++}
+ @media (max-width: 900px) {
+-  .bpmn-panel { flex: 1 1 100%; width: 100%; }
++  .bpmn-navigator, .bpmn-panel { flex: 1 1 100%; width: 100%; max-height: 320px; }
++  .bpmn-canvas { flex: 1 1 100%; min-height: 420px; }
+   .app-content { padding: 16px; }
+ }
+\ No newline at end of file
+diff --git a/static/portfolio-ui/src/bpmn/BpmnDiagramView.jsx b/static/portfolio-ui/src/bpmn/BpmnDiagramView.jsx
+index 103a6a2..8943702 100644
+--- a/static/portfolio-ui/src/bpmn/BpmnDiagramView.jsx
++++ b/static/portfolio-ui/src/bpmn/BpmnDiagramView.jsx
+@@ -6,7 +6,7 @@ import TokenSimulationModule from 'bpmn-js-token-simulation';
+ import 'bpmn-js-token-simulation/assets/css/bpmn-js-token-simulation.css';
+ import 'bpmn-font/dist/css/bpmn.css';
+ import 'bpmn-js/dist/assets/diagram-js.css';
+-import JiraPropertiesProvider, { ReadOnlyLinkedResourcesGroup } from './JiraPropertiesProvider';
++import JiraPropertiesProvider, { ReadOnlyLinkedResourcesGroup, getLinkedResources } from './JiraPropertiesProvider';
+ import jiraResourcesModdle from './moddle/jira-resources.json';
+ 
+ const EMPTY_BPMN_XML = `<?xml version="1.0" encoding="UTF-8"?>
+@@ -63,6 +63,115 @@ function ViewerPropertiesPanel({ instance }) {
+   );
+ }
+ 
++// Sidebar navigator that lists every BPMN element carrying a
++// jira:LinkedResources extension. The whole point is to be visible
++// regardless of which element is currently selected in the bpmn-js
++// canvas — that way enabling token simulation (which makes the panel
++// focus the Process) doesn't hide the End Event's PAY-4 entry. Each row
++// is a button: clicking it selects the element and pans the canvas so
++// the user lands on it. The filter input narrows by name, issue key, or
++// element type. The list is sorted by element id for a stable order.
++function LinkedResourcesNavigator({ instance, onNavigate }) {
++  const [items, setItems] = useState([]);
++  const [query, setQuery] = useState('');
++
++  useEffect(() => {
++    if (!instance) return undefined;
++
++    const collect = () => {
++      const registry = instance.get('elementRegistry');
++      const found = [];
++      registry.getAll().forEach((el) => {
++        if (!el || !el.businessObject) return;
++        if (el.type === 'label' || el.type === 'root') return;
++        const ext = getLinkedResources(el.businessObject);
++        if (!ext) return;
++        found.push({
++          id: el.id,
++          name: el.businessObject.name || el.id,
++          type: el.type,
++          issueKey: ext.issueKey || '',
++          confluencePage: ext.confluencePage || '',
++          documentation: ext.documentation || '',
++        });
++      });
++      found.sort((a, b) => a.id.localeCompare(b.id));
++      setItems(found);
++    };
++
++    collect();
++    // Re-collect after any XML import or any modeling operation —
++    // commandStack.changed fires on every add/remove/edit, which is
++    // exactly when the set of elements-with-linked-resources can change.
++    instance.on('import.done', collect);
++    instance.on('commandStack.changed', collect);
++    return () => {
++      instance.off('import.done', collect);
++      instance.off('commandStack.changed', collect);
++    };
++  }, [instance]);
++
++  const q = query.trim().toLowerCase();
++  const filtered = !q
++    ? items
++    : items.filter((it) =>
++        (it.name || '').toLowerCase().includes(q) ||
++        (it.issueKey || '').toLowerCase().includes(q) ||
++        it.type.toLowerCase().includes(q)
++      );
++
++  return (
++    <div className="bpmn-navigator" data-testid="bpmn-linked-resources-navigator">
++      <div className="bpmn-nav-header">
++        <h3 className="bpmn-nav-title">Linked Resources</h3>
++        <span className="bpmn-nav-count" data-testid="bpmn-nav-count">{items.length}</span>
++      </div>
++      <input
++        type="text"
++        className="bpmn-nav-search"
++        placeholder="Filter by name or key…"
++        value={query}
++        onChange={(e) => setQuery(e.target.value)}
++        data-testid="bpmn-nav-search"
++        aria-label="Filter linked resources by name, type, or issue key"
++      />
++      <ul className="bpmn-nav-list" data-testid="bpmn-nav-list">
++        {filtered.length === 0 && (
++          <li className="bpmn-nav-empty">
++            {items.length === 0
++              ? 'No elements have linked Jira resources yet. Select an element and add one in the Properties panel.'
++              : 'No matches for that filter.'}
++          </li>
++        )}
++        {filtered.map((item) => (
++          <li key={item.id} className="bpmn-nav-item">
++            <button
++              type="button"
++              className="bpmn-nav-item-btn"
++              onClick={() => onNavigate(item.id)}
++              data-testid={`bpmn-nav-item-${item.id}`}
++              title={`Jump to ${item.name} (${item.type})`}
++            >
++              <div className="bpmn-nav-item-row">
++                <span className="bpmn-nav-item-name">{item.name || item.id}</span>
++                <span className="bpmn-nav-item-type">{item.type}</span>
++              </div>
++              {item.issueKey && (
++                <div className="bpmn-nav-item-key">
++                  <span className="bpmn-nav-item-key-pill">{item.issueKey}</span>
++                </div>
++              )}
++              {item.confluencePage && (
++                <div className="bpmn-nav-item-meta" title="Has Confluence page">📄 Confluence linked</div>
++              )}
++            </button>
++          </li>
++        ))}
++      </ul>
++    </div>
++  );
++}
++
+ export default function BpmnDiagramView({
+   diagramXml, canEdit, onSave, onDirtyChange, saveDisabled,
+   // viadee-style model header (all optional / backwards compatible)
+@@ -85,6 +194,13 @@ export default function BpmnDiagramView({
+   const findCursorRef = useRef(-1);
+   const lastQueryRef = useRef('');
+ 
++  // Linked Resources Navigator — visible by default because token-simulation
++  // can shift the bpmn-js Properties panel focus to the Process and hide
++  // the End Event's linked resources; the navigator gives the user an
++  // always-visible index of every element with a jira:LinkedResources
++  // extension, plus a one-click jump to that element.
++  const [showNavigator, setShowNavigator] = useState(true);
++
+   useEffect(() => {
+     if (!canvasRef.current) return undefined;
+     const Ctor = canEdit ? BpmnModeler : BpmnViewer;
+@@ -179,13 +295,23 @@ export default function BpmnDiagramView({
+     if (matches.length === 0) { setFindStatus('No matches'); return; }
+     findCursorRef.current = (findCursorRef.current + 1) % matches.length;
+     const el = matches[findCursorRef.current];
++    navigateToElement(el);
++    setFindStatus(`${findCursorRef.current + 1} of ${matches.length}`);
++  };
++
++  // Selects an element in the canvas and pans the viewbox to centre on it.
++  // Used by both the "Find" toolbar action and the Linked Resources
++  // Navigator sidebar — extracting it keeps the math in one place so the
++  // navigator jump and the search jump behave identically.
++  const navigateToElement = (el) => {
++    const inst = instanceRef.current;
++    if (!inst || !el) return;
+     try { inst.get('selection').select(el); } catch (e) { /* ignore */ }
+     try {
+       const pad = 80;
+       const x = el.x ?? 0, y = el.y ?? 0, w = el.width || 120, hgt = el.height || 80;
+       inst.get('canvas').viewbox({ x: x - pad, y: y - pad, width: w + pad * 2, height: hgt + pad * 2 });
+     } catch (e) { /* ignore */ }
+-    setFindStatus(`${findCursorRef.current + 1} of ${matches.length}`);
+   };
+   const onFindInputChange = (e) => {
+     const v = e.target.value;
+@@ -230,6 +356,18 @@ export default function BpmnDiagramView({
+           </>
+         )}
+ 
++        <div className="bpmn-tb-group">
++          <button
++            className={`bpmn-tb-btn ${showNavigator ? 'primary' : ''}`}
++            onClick={() => setShowNavigator((v) => !v)}
++            data-testid="toggle-navigator"
++            title={showNavigator ? 'Hide the Linked Resources navigator' : 'Show the Linked Resources navigator'}
++            aria-pressed={showNavigator}
++          >
++            {showNavigator ? '◧' : '◨'} Navigator
++          </button>
++        </div>
++
+         <div className="bpmn-tb-group">
+           <button className="bpmn-tb-btn" onClick={() => zoomBy(1 / 1.2)} title="Zoom out">−</button>
+           <button className="bpmn-tb-btn" onClick={zoomFit} title="Fit to screen" style={{ minWidth: 52 }}>{zoomPct}%</button>
+@@ -248,8 +386,23 @@ export default function BpmnDiagramView({
+         </div>
+       </div>
+ 
+-      {/* Canvas + properties / attribute panel */}
++      {/* Canvas + properties / attribute panel. Order is intentional:
++          navigator on the left, canvas in the middle, properties on the
++          right — matches the viadee "BPMN Modeler for Confluence"
++          layout shown in the design reference. The navigator stays open
++          even when token simulation shifts the bpmn-js Properties panel
++          focus to the Process, so the End Event's linked resources
++          remain one click away. */}
+       <div className="bpmn-canvas-col">
++        {showNavigator && (
++          <LinkedResourcesNavigator
++            instance={instance}
++            onNavigate={(elementId) => {
++              const el = instanceRef.current?.get('elementRegistry').get(elementId);
++              if (el) navigateToElement(el);
++            }}
++          />
++        )}
+         <div ref={canvasRef} data-testid="bpmn-canvas" className="bpmn-canvas" />
+         {canEdit
+           ? <div id="js-properties-panel" data-testid="bpmn-properties-panel" className="bpmn-panel" />
